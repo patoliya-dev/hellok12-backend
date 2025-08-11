@@ -5,7 +5,7 @@ import User from '../models/User.model';
 
 export const register = async (req: Request, res: Response) => {
   console.log('Received registration request:', req.body);
-  
+
   try {
     const { name, email, password, role } = req.body;
     const hashed = await bcrypt.hash(password, 10);

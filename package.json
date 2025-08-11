@@ -5,9 +5,17 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
-    "build": "tsc",
-    "start": "npx ts-node-dev src/server.ts",
-    "prepare": "husky install"
+    "build": "npm run tsc",
+    "prepare": "husky install",
+    "start": "node dist/app.js",
+    "clean": "rimraf \"dist/*\"",
+    "lint": "eslint . --ext .ts",
+    "lint-fix": "eslint . --ext .ts --fix",
+    "tsc": "tsc --project ./",
+    "build-files": "copyfiles -u 0 src/views/*.html dist/",
+    "watch": "./node_modules/nodemon/bin/nodemon.js -e ts  --exec \"tsc\"",
+    "start-dev": "nodemon dist/server.js",
+    "build-run": "tsc && npm start"
   },
   "keywords": [],
   "author": "",
@@ -37,9 +45,11 @@
     "eslint-plugin-prettier": "^5.5.4",
     "husky": "^9.1.7",
     "lint-staged": "^16.1.5",
+    "nodemon": "^3.1.10",
     "prettier": "^3.6.2",
     "ts-node-dev": "^2.0.0",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.39.0"
   },
   "lint-staged": {
     "*.{ts,tsx}": [

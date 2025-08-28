@@ -12,7 +12,6 @@
     "lint": "eslint . --ext .ts",
     "lint-fix": "eslint . --ext .ts --fix",
     "tsc": "tsc --project ./",
-    "build-files": "copyfiles -u 0 src/views/*.html dist/",
     "watch": "./node_modules/nodemon/bin/nodemon.js -e ts  --exec \"tsc\"",
     "start-dev": "nodemon dist/server.js",
     "build-run": "tsc && npm start"

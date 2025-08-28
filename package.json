@@ -7,7 +7,7 @@
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "build": "npm run tsc",
     "prepare": "husky install",
-    "start": "node dist/app.js",
+    "start": "node dist/server.js",
     "clean": "rimraf \"dist/*\"",
     "lint": "eslint . --ext .ts",
     "lint-fix": "eslint . --ext .ts --fix",

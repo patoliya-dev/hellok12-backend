@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import path from 'path';
 import helmet from 'helmet';
 import dotenv from 'dotenv';
 import morgan from 'morgan';
@@ -15,10 +16,15 @@ app.use(morgan('dev'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-app.use('/api/v1', routes);
+// Serve static files
+app.use(express.static(path.join(__dirname, '../public')));
 
-app.get("/", (req, res) => {
-  res.send("Hellok12 API is running ✅");
+// Root route → serve index.html
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, '../public/index.html'));
 });
+
+// API routes
+app.use('/api/v1', routes);
 
 export default app;

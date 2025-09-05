@@ -2,7 +2,7 @@ import { User, IUser } from '../models/user.model';
 import bcrypt from 'bcryptjs';
 import { Types } from 'mongoose';
 import { randomInt } from 'crypto';
-import { sendVerificationEmail, sendResetPasswordEmail, sendVerificationCode } from './email.service';
+import { sendVerificationEmail, sendVerificationCode } from './email.service';
 import { generateToken, generateRefreshToken, verifyRefreshToken } from '../utils/jwt.util';
 import { PasswordResetToken } from '../models/passwordResetToken.model';
 

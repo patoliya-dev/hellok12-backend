@@ -78,7 +78,7 @@ export const authService = {
     return user;
   },
 
-  login: async (email: string, password: string): Promise<{ accessToken: string; refreshToken: string }> => {
+  login: async (email: string, password: string): Promise<{ accessToken: string; refreshToken: string, user: IUser }> => {
     const user = await User.findOne({ email });
     if (!user) throw new Error('Invalid credentials');
     if (!user.isVerified) throw new Error('Email not verified');
@@ -89,7 +89,7 @@ export const authService = {
     const accessToken = generateToken({ id: user._id.toString(), role: user.role });
     const refreshToken = generateRefreshToken({ id: user._id.toString() });
 
-    return { accessToken, refreshToken };
+    return { accessToken, refreshToken, user };
   },
 
   verifyEmail: async (token: string): Promise<IUser> => {
@@ -142,9 +142,7 @@ export const authService = {
     return tokenDoc.user;
   },
 
-  resetPassword: async (email: string, code: string, newPassword: string, confirmPassword: string): Promise<void> => {
-    if (newPassword !== confirmPassword) throw new Error('Passwords do not match');
-
+  resetPassword: async (email: string, code: string, newPassword: string): Promise<void> => {
     const user = await authService.verifyResetCode(email, code);
 
     user.password = await bcrypt.hash(newPassword, 12);

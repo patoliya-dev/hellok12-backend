@@ -59,5 +59,4 @@ export const resetPasswordValidation = [
   body('email').isEmail(),
   body('code').isLength({ min: 6, max: 6 }),
   body('newPassword').isLength({ min: 6 }),
-  body('confirmPassword').isLength({ min: 6 }),
 ];

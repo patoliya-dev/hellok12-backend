@@ -30,7 +30,11 @@ export const authController = {
 
   verifyEmail: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { token } = req.params;
+      const token = req.query.token as string;
+      if (!token) {
+        return res.status(400).json({ success: false, message: "Token missing" });
+      }
+
       const user = await authService.verifyEmail(token);
       res.json({ message: 'Email verified', userId: user._id });
     } catch (error) {
@@ -69,8 +73,8 @@ export const authController = {
       const errors = validationResult(req);
       if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-      const { email, code, newPassword, confirmPassword } = req.body;
-      await authService.resetPassword(email, code, newPassword, confirmPassword);
+      const { email, code, newPassword } = req.body;
+      await authService.resetPassword(email, code, newPassword);
       res.json({ message: 'Password reset successfully' });
     } catch (error) {
       next(error);
@@ -86,4 +90,13 @@ export const authController = {
       next(error);
     }
   },
+
+  getCurrentUser: async (req: Request, res: Response) => {
+    try {
+      if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
+      res.json(req.user);
+    } catch (err) {
+      res.status(500).json({ message: 'Server error', error: err });
+    }
+  }
 };

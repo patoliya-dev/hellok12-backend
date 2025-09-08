@@ -18,6 +18,8 @@ export interface IUser extends Document {
   children?: Types.ObjectId[];
   isVerified: boolean;
   profile?: IUserProfile;
+  termsAccepted: boolean;
+  marketingConsent?: boolean;
 }
 
 // Conditional required fields for student without parent
@@ -48,6 +50,8 @@ const UserSchema = new Schema<IUser>(
     children: [{ type: Schema.Types.ObjectId, ref: 'User' }],
     isVerified: { type: Boolean, default: false },
     profile: { type: Schema.Types.Mixed, default: {} },
+    termsAccepted: { type: Boolean, default: false },
+    marketingConsent: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

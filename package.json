@@ -4,19 +4,17 @@
   "description": "",
   "main": "dist/server.js",
   "scripts": {
-    "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
+    "dev": "cross-env NODE_ENV=development ts-node-dev --respawn --transpile-only src/server.ts",
     "build": "npm run tsc",
     "prepare": "husky install",
-    "start": "node dist/server.js",
+    "start": "cross-env NODE_ENV=production node dist/server.js",
     "clean": "rimraf \"dist/*\"",
     "lint": "eslint . --ext .ts",
     "lint-fix": "eslint . --ext .ts --fix",
     "tsc": "tsc --project ./",
     "watch": "./node_modules/nodemon/bin/nodemon.js -e ts  --exec \"tsc\"",
     "start-dev": "nodemon dist/server.js",
-    "build-run": "tsc && npm start",
-    "start:dev": "cross-env NODE_ENV=development ts-node-dev --respawn --transpile-only src/server.ts",
-    "start:prod": "cross-env NODE_ENV=production node dist/server.js"
+    "build-run": "tsc && npm start"
   },
   "keywords": [],
   "author": "",

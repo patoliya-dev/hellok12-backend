@@ -76,7 +76,7 @@ export const sendVerificationCode = async (options: ForgotPasswordEmailOptions) 
   });
 
   const mailOptions = {
-    from: process.env.FROM_EMAIL || '"Your Company" <no-reply@yourcompany.com>',
+    from: config.emailFrom,
     to: email,
     subject: 'Reset Your Password - Verification Code',
     html,

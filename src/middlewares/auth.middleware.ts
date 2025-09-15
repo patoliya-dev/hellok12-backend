@@ -3,14 +3,14 @@ import jwt from 'jsonwebtoken';
 import { UserPayload } from '../types/UserPayload';
 import { User } from '../models/user.model';
 
-const JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET!;
+const JWT_SECRET = process.env.JWT_SECRET!;
 
 export const authenticate = async (req: Request, res: Response, next: NextFunction) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ message: 'No token provided' });
 
   try {
-    const secret = process.env.JWT_ACCESS_SECRET || 'secret';
+    const secret = JWT_SECRET || 'secret';
     const decoded = jwt.verify(token, secret) as UserPayload; // Type as UserPayload
 
     const user = await User.findById(decoded.id).select('-password');

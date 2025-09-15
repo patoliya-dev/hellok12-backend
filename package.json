@@ -4,10 +4,10 @@
   "description": "",
   "main": "dist/server.js",
   "scripts": {
-    "dev": "cross-env NODE_ENV=development ts-node-dev --respawn --transpile-only src/server.ts",
+    "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "build": "npm run tsc",
     "prepare": "husky install",
-    "start": "cross-env NODE_ENV=production node dist/server.js",
+    "start": "node dist/server.js",
     "clean": "rimraf \"dist/*\"",
     "lint": "eslint . --ext .ts",
     "lint-fix": "eslint . --ext .ts --fix",

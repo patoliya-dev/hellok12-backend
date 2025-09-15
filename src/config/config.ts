@@ -5,7 +5,7 @@ import path from 'path';
 const NODE_ENV = process.env.NODE_ENV || 'development';
 
 // Pick the correct .env file
-const envFile = path.resolve(process.cwd(), `.env.${NODE_ENV}`);
+const envFile = path.resolve(process.cwd(), `.env`);
 dotenv.config({ path: envFile });
 
 console.log('Loaded environment:', NODE_ENV);

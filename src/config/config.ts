@@ -36,15 +36,15 @@ const config: Config = {
   jwtSecret: process.env.JWT_SECRET || 'default_jwt_secret',
   jwtExpiresIn: (process.env.JWT_EXPIRES_IN as `${number}${"d" | "h" | "m" | "s"}`) || '7d',
   jwtRefreshSecret: process.env.JWT_REFRESH_SECRET || 'default_refresh_secret',
-  jwtRefreshExpiresIn: (process.env.JWT_REFRESH_EXPIRES_IN as `${number}${"d" | "h" | "m" | "s"}`) || '7d',
-  clientURL: process.env.CLIENT_URL || 'http://localhost:3000',
+  jwtRefreshExpiresIn: '7d',
+  clientURL: process.env.CLIENT_URL || 'https://dev-app.hellok12.com',
   nodeEnv: NODE_ENV,
-  emailService: process.env.EMAIL_SERVICE || 'gmail',
-  emailHost: process.env.EMAIL_HOST || 'smtp.gmail.com',
-  emailPort: Number(process.env.EMAIL_PORT) || 465,
+  emailService: 'gmail',
+  emailHost: 'smtp.gmail.com',
+  emailPort: 465,
   emailUser: process.env.EMAIL_USER || '',
   emailPass: process.env.EMAIL_PASS || '',
-  emailFrom: process.env.EMAIL_FROM || process.env.EMAIL_USER || '',
+  emailFrom: `Hello12K <${process.env.EMAIL_USER}>`,
 };
 
 export default config;

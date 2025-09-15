@@ -24,7 +24,7 @@ const compileTemplate = (templateName: string, context: TemplateContext): string
     const templatePath = path.join(__dirname, `../templates/${templateName}.hbs`);
     const source = fs.readFileSync(templatePath, 'utf8');
     const template = Handlebars.compile(source);
-    return template({ ...context, verificationLink: `${config.clientURL + 'verify-email?token=' + context.token}` });
+    return template({ ...context, verificationLink: `${config.clientURL + '/verify-email?token=' + context.token}` });
   } catch (err) {
     console.error(`Failed to load template ${templateName}:`, err);
     throw new Error('Email template loading failed');

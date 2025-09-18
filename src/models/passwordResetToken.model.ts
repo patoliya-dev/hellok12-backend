@@ -11,9 +11,12 @@ const PasswordResetTokenSchema = new Schema<IPasswordResetToken>(
   {
     user: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     code: { type: String, required: true },
-    expiresAt: { type: Date, required: true },
+    expiresAt: { type: Date, required: true }
   },
   { timestamps: true }
 );
 
-export const PasswordResetToken = model<IPasswordResetToken>('PasswordResetToken', PasswordResetTokenSchema);
+export const PasswordResetToken = model<IPasswordResetToken>(
+  'PasswordResetToken',
+  PasswordResetTokenSchema
+);

@@ -1,9 +1,7 @@
 import { body } from 'express-validator';
 
 export const signupValidation = [
-  body('role')
-    .isIn(['student', 'parent', 'teacher', 'school'])
-    .withMessage('Invalid role'),
+  body('role').isIn(['student', 'parent', 'teacher', 'school']).withMessage('Invalid role'),
 
   body('name').notEmpty().withMessage('Name is required'),
   body('phone').optional(),
@@ -38,25 +36,25 @@ export const signupValidation = [
   body('children.*.gender')
     .optional()
     .isIn(['male', 'female', 'other'])
-    .withMessage('Child gender must be male, female, or other'),
+    .withMessage('Child gender must be male, female, or other')
 ];
 
 export const loginValidation = [
   body('email').isEmail().withMessage('Valid email required'),
-  body('password').exists().withMessage('Password required'),
+  body('password').exists().withMessage('Password required')
 ];
 
 export const forgotPasswordValidation = [
-  body('email').isEmail().withMessage('Valid email required'),
+  body('email').isEmail().withMessage('Valid email required')
 ];
 
 export const verifyCodeValidation = [
   body('email').isEmail(),
-  body('code').isLength({ min: 6, max: 6 }).withMessage('6-digit code required'),
+  body('code').isLength({ min: 6, max: 6 }).withMessage('6-digit code required')
 ];
 
 export const resetPasswordValidation = [
   body('email').isEmail(),
   body('code').isLength({ min: 6, max: 6 }),
-  body('newPassword').isLength({ min: 6 }),
+  body('newPassword').isLength({ min: 6 })
 ];

@@ -1,0 +1,20 @@
+# Packge lock
+package-lock.json
+
+# Ignore build output
+node_modules
+dist
+build
+
+# Ignore environment/config files
+.env
+*.lock
+
+# Ignore templates
+*.hbs
+*.mustache
+
+# Ignore other assets
+*.svg
+*.png
+*.jpg

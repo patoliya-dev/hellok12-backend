@@ -32,15 +32,19 @@ const UserSchema = new Schema<IUser>(
       sparse: true, // important for allowing multiple nulls
       required: function () {
         // Email is required only if user is student without parent OR independent roles (teacher, school)
-        return (this.role === 'student' && !this.parent) || ['teacher', 'school'].includes(this.role);
-      },
+        return (
+          (this.role === 'student' && !this.parent) || ['teacher', 'school'].includes(this.role)
+        );
+      }
     },
     password: {
       type: String,
       required: function () {
         // Password required only if user is student without parent OR independent roles
-        return (this.role === 'student' && !this.parent) || ['teacher', 'school'].includes(this.role);
-      },
+        return (
+          (this.role === 'student' && !this.parent) || ['teacher', 'school'].includes(this.role)
+        );
+      }
     },
     name: { type: String, required: true },
     role: { type: String, enum: ['student', 'parent', 'teacher', 'school'], required: true },
@@ -51,7 +55,7 @@ const UserSchema = new Schema<IUser>(
     isVerified: { type: Boolean, default: false },
     profile: { type: Schema.Types.Mixed, default: {} },
     termsAccepted: { type: Boolean, default: false },
-    marketingConsent: { type: Boolean, default: false },
+    marketingConsent: { type: Boolean, default: false }
   },
   { timestamps: true }
 );

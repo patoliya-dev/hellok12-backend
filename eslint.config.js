@@ -1,46 +1,26 @@
-// eslint.config.js
-import eslint from '@eslint/js';
+import globals from 'globals';
+import pluginJs from '@eslint/js';
 import tseslint from 'typescript-eslint';
-import prettierPlugin from 'eslint-plugin-prettier';
-import prettierConfig from 'eslint-config-prettier';
 
+/** @type {import('eslint').Linter.Config[]} */
 export default [
-  // Ignore build output and generated files
-  {
-    ignores: ['dist', 'node_modules', '*.d.ts'],
-  },
-
-  // ESLint core recommendations
-  eslint.configs.recommended,
-
-  // TypeScript ESLint recommendations
+  { files: ['**/*.{js,mjs,cjs,ts}'] },
+  pluginJs.configs.recommended,
   ...tseslint.configs.recommended,
-
-  // Project-specific TypeScript + Prettier config
   {
-    files: ['*.ts', '*.tsx'],
     languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
       parser: tseslint.parser,
-      parserOptions: {
-        ecmaVersion: 'latest',
-        sourceType: 'module',
-        project: './tsconfig.json', // For type-aware linting
-      },
+      globals: globals.node
     },
     plugins: {
-      '@typescript-eslint': tseslint.plugin,
-      prettier: prettierPlugin,
+      '@typescript-eslint': tseslint.plugin
     },
     rules: {
-      'prettier/prettier': 'error',
-      '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
-      '@typescript-eslint/explicit-module-boundary-types': 'off',
-      '@typescript-eslint/no-explicit-any': 'off',
       'no-console': 'warn',
-    },
-  },
-
-  // Disable ESLint stylistic rules that conflict with Prettier
-  prettierConfig,
+      '@typescript-eslint/no-unused-vars': 'off',
+      '@typescript-eslint/no-explicit-any': 'off'
+    }
+  }
 ];
-

@@ -7,17 +7,15 @@ import { generateToken, generateRefreshToken, verifyRefreshToken } from '../util
 import { PasswordResetToken } from '../models/passwordResetToken.model';
 
 export const authService = {
-  signup: async (
-    payload: {
-      name: string;
-      email?: string;
-      password?: string;
-      phone?: string;
-      role: IUser['role'];
-      schoolId?: string;
-      children?: { name: string; age?: number; gender?: string }[];
-    }
-  ): Promise<IUser> => {
+  signup: async (payload: {
+    name: string;
+    email?: string;
+    password?: string;
+    phone?: string;
+    role: IUser['role'];
+    schoolId?: string;
+    children?: { name: string; age?: number; gender?: string }[];
+  }): Promise<IUser> => {
     const { name, email, password, role, phone, schoolId, children } = payload;
 
     // Email unique check only if email exists
@@ -35,7 +33,7 @@ export const authService = {
       role,
       phone,
       isVerified: false,
-      school: schoolId ? new Types.ObjectId(schoolId) : undefined,
+      school: schoolId ? new Types.ObjectId(schoolId) : undefined
     };
 
     const user = new User(userData);
@@ -51,7 +49,7 @@ export const authService = {
           role: 'student',
           parent: user._id,
           isVerified: false,
-          profile: { age: child.age, gender: child.gender },
+          profile: { age: child.age, gender: child.gender }
         });
 
         await childUser.save();
@@ -78,7 +76,10 @@ export const authService = {
     return user;
   },
 
-  login: async (email: string, password: string): Promise<{ accessToken: string; refreshToken: string, user: IUser }> => {
+  login: async (
+    email: string,
+    password: string
+  ): Promise<{ accessToken: string; refreshToken: string; user: IUser }> => {
     const user = await User.findOne({ email });
     if (!user) throw new Error('Invalid credentials');
     if (!user.isVerified) throw new Error('Email not verified');
@@ -117,14 +118,14 @@ export const authService = {
     await PasswordResetToken.create({
       user: user._id,
       code,
-      expiresAt: expiryMinutes, // 15 mins expiry
+      expiresAt: expiryMinutes // 15 mins expiry
     });
 
     await sendVerificationCode({
       email,
       name: user.name,
       code,
-      expiryMinutes: 15,
+      expiryMinutes: 15
     });
   },
 
@@ -152,7 +153,9 @@ export const authService = {
     await PasswordResetToken.deleteOne({ code, user: user._id });
   },
 
-  refreshToken: async (oldToken: string): Promise<{ accessToken: string; refreshToken: string }> => {
+  refreshToken: async (
+    oldToken: string
+  ): Promise<{ accessToken: string; refreshToken: string }> => {
     const decoded = verifyRefreshToken(oldToken);
     const user = await User.findById(decoded.id);
     if (!user) throw new Error('User not found');
@@ -161,5 +164,5 @@ export const authService = {
     const refreshToken = generateRefreshToken({ id: user._id.toString() });
 
     return { accessToken, refreshToken };
-  },
+  }
 };

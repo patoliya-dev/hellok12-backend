@@ -6,7 +6,7 @@ import {
   loginValidation,
   forgotPasswordValidation,
   verifyCodeValidation,
-  resetPasswordValidation,
+  resetPasswordValidation
 } from '../middlewares/validation.middleware';
 
 const router = express.Router();

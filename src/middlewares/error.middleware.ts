@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import Logger from '../utils/winstonLogger.utils'; // adjust path
 
 interface CustomError extends Error {
   status?: number;
@@ -8,17 +9,19 @@ export const errorHandler = (
   err: CustomError,
   req: Request,
   res: Response,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  next: NextFunction
+  _next: NextFunction
 ) => {
-  const status = err.status || 500;
-  const message = err.message || 'Internal Server Error';
+  const statusCode = err.status ?? 500;
+  const message = err.message ?? 'Internal Server Error';
 
-  console.error('Error stack:', err.stack);
-  console.log('Error message:', message);
+  // Structured logging
+  Logger.error(
+    `${req.method} ${req.originalUrl} | ${statusCode} - ${message} \nStack: ${err.stack ?? 'N/A'}`
+  );
 
-  res.status(status).json({
+  res.status(statusCode).json({
     success: false,
-    error: message,
+    statusCode,
+    message
   });
 };

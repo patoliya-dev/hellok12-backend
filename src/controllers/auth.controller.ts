@@ -32,7 +32,7 @@ export const authController = {
     try {
       const token = req.query.token as string;
       if (!token) {
-        return res.status(400).json({ success: false, message: "Token missing" });
+        return res.status(400).json({ success: false, message: 'Token missing' });
       }
 
       const user = await authService.verifyEmail(token);

@@ -8,16 +8,14 @@ const NODE_ENV = process.env.NODE_ENV || 'development';
 const envFile = path.resolve(process.cwd(), `.env`);
 dotenv.config({ path: envFile });
 
-console.log('Loaded environment:', NODE_ENV);
-
 interface Config {
   env: string;
   port: number;
   mongoURI: string;
   jwtSecret: string;
-  jwtExpiresIn: number | `${number}${"d" | "h" | "m" | "s"}`;
+  jwtExpiresIn: number | `${number}${'d' | 'h' | 'm' | 's'}`;
   jwtRefreshSecret: string;
-  jwtRefreshExpiresIn: number | `${number}${"d" | "h" | "m" | "s"}`;
+  jwtRefreshExpiresIn: number | `${number}${'d' | 'h' | 'm' | 's'}`;
   clientURL: string;
   nodeEnv: string;
   emailService: string;
@@ -34,7 +32,7 @@ const config: Config = {
   port: Number(process.env.PORT) || 3000,
   mongoURI: process.env.MONGO_URI || 'mongodb://localhost:27017/hello12k',
   jwtSecret: process.env.JWT_SECRET || 'default_jwt_secret',
-  jwtExpiresIn: (process.env.JWT_EXPIRES_IN as `${number}${"d" | "h" | "m" | "s"}`) || '7d',
+  jwtExpiresIn: (process.env.JWT_EXPIRES_IN as `${number}${'d' | 'h' | 'm' | 's'}`) || '7d',
   jwtRefreshSecret: process.env.JWT_REFRESH_SECRET || 'default_refresh_secret',
   jwtRefreshExpiresIn: '7d',
   clientURL: process.env.CLIENT_URL || 'https://dev-app.hellok12.com',
@@ -44,7 +42,7 @@ const config: Config = {
   emailPort: 465,
   emailUser: process.env.EMAIL_USER || '',
   emailPass: process.env.EMAIL_PASS || '',
-  emailFrom: `Hello12K <${process.env.EMAIL_USER}>`,
+  emailFrom: `Hello12K <${process.env.EMAIL_USER}>`
 };
 
 export default config;

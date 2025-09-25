@@ -327,14 +327,11 @@ export const authService = {
     password: string,
     rememberMe: boolean = false
   ): Promise<AuthResult> => {
-    console.log('email', email);
-
     try {
       const user = await User.findOne({ email: email.toLowerCase() }).populate(
         'children',
         'name profile.age profile.gender'
       );
-      console.log('user', user);
 
       if (!user) {
         throw new Error('Invalid credentials'); // Matches PDF "Wrong password" message
@@ -344,11 +341,7 @@ export const authService = {
         throw new Error('Email not verified'); // Triggers email verification flow
       }
 
-      console.log('password', password);
-      console.log('user.password', user.password);
-
       const isPasswordValid = await bcrypt.compare(password, user.password || '');
-      console.log('isPasswordValid', isPasswordValid);
 
       if (!isPasswordValid) {
         throw new Error('Invalid credentials'); // Matches PDF "Wrong password" message

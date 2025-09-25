@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import config from '../config/config';
 import Logger from '../utils/winstonLogger.utils';
+import { EMAIL_TEMPLATE_DIR } from '../config/email';
 
 interface TemplateContext {
   [key: string]: string | number | boolean | object | undefined;
@@ -70,7 +71,7 @@ const compileTemplate = (templateName: string, context: TemplateContext): string
     let template = templateCache.get(templateName);
 
     if (!template) {
-      const templatePath = path.join(__dirname, `../templates/${templateName}.hbs`);
+      const templatePath = path.join(EMAIL_TEMPLATE_DIR, `${templateName}.hbs`);
       Logger.info('Looking for template at:', templatePath);
 
       if (!fs.existsSync(templatePath)) {

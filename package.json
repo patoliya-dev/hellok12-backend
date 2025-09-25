@@ -5,7 +5,7 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
-    "build": "npm run tsc",
+    "build": "npm run tsc && node scripts/copyTemplates.js",
     "prepare": "husky install",
     "start": "node dist/server.js",
     "clean": "rimraf \"dist/*\"",

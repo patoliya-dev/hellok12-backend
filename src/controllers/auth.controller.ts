@@ -1,30 +1,109 @@
 import { Request, Response, NextFunction } from 'express';
 import { authService } from '../services/auth.service';
-import { validationResult } from 'express-validator';
 
 export const authController = {
   signup: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+      const { role, children, ...otherData } = req.body;
 
-      const user = await authService.signup(req.body);
-      res.status(201).json({ message: 'User created, verification email sent', userId: user._id });
-    } catch (error) {
-      next(error);
+      let result;
+
+      // Route to appropriate service method based on role
+      switch (role) {
+        case 'student':
+          result = await authService.registerStudent({
+            ...otherData,
+            role: role
+          });
+          break;
+
+        case 'parent':
+          result = await authService.registerParent({
+            ...otherData,
+            children: children || []
+          });
+          break;
+
+        case 'teacher':
+          result = await authService.registerTeacher({
+            ...otherData,
+            role: role
+          });
+          break;
+
+        case 'school':
+          result = await authService.registerSchool({
+            ...otherData,
+            role: role
+          });
+          break;
+
+        default:
+          return res.status(400).json({
+            success: false,
+            message: 'Invalid role specified'
+          });
+      }
+
+      // Handle parent result (which returns parent + children)
+      const user: any = (result as any).parent || result;
+      const userId = user._id;
+
+      res.status(201).json({
+        success: true,
+        message: 'Account created successfully, verification email sent',
+        data: {
+          user: {
+            id: userId,
+            email: user.email,
+            name: user.name,
+            role: user.role,
+            isVerified: user.isVerified
+          },
+          userId,
+          requiresEmailVerification: true
+        }
+      });
+    } catch (error: any) {
+      res.status(400).json({
+        success: false,
+        message: error.message || 'Registration failed'
+      });
     }
   },
 
   login: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+      const { email, password, rememberMe } = req.body;
+      const result = await authService.login(email, password, rememberMe);
 
-      const { email, password } = req.body;
-      const tokens = await authService.login(email, password);
-      res.json(tokens);
-    } catch (error) {
-      next(error);
+      res.json({
+        success: true,
+        message: 'Login successful',
+        accessToken: result.accessToken,
+        refreshToken: result.refreshToken,
+        user: result.user
+      });
+    } catch (error: any) {
+      // Handle specific error messages your frontend expects
+      if (error.message === 'Invalid credentials') {
+        return res.status(401).json({
+          success: false,
+          message: 'Wrong password. Try again or click Forgot password to reset it.'
+        });
+      }
+
+      if (error.message === 'Email not verified') {
+        return res.status(401).json({
+          success: false,
+          message: 'Please verify your email before logging in'
+        });
+      }
+
+      res.status(401).json({
+        success: false,
+        message: error.message || 'Login failed'
+      });
     }
   },
 
@@ -32,52 +111,73 @@ export const authController = {
     try {
       const token = req.query.token as string;
       if (!token) {
-        return res.status(400).json({ success: false, message: 'Token missing' });
+        return res.status(400).json({
+          success: false,
+          message: 'Token missing'
+        });
       }
 
-      const user = await authService.verifyEmail(token);
-      res.json({ message: 'Email verified', userId: user._id });
-    } catch (error) {
-      next(error);
+      const result = await authService.verifyEmail(token);
+      res.json({
+        success: true,
+        message: 'Email verified',
+        user: result.user,
+        accessToken: result.accessToken,
+        refreshToken: result.refreshToken
+      });
+    } catch (error: any) {
+      res.status(400).json({
+        success: false,
+        message: error.message || 'Email verification failed'
+      });
     }
   },
 
   forgotPassword: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
-
       const { email } = req.body;
       await authService.forgotPassword(email);
-      res.json({ message: 'Verification code sent to email' });
-    } catch (error) {
-      next(error);
+      res.json({
+        success: true,
+        message: 'Verification code sent to email'
+      });
+    } catch (error: any) {
+      res.status(400).json({
+        success: false,
+        message: error.message || 'Failed to send verification code'
+      });
     }
   },
 
   verifyResetCode: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
-
       const { email, code } = req.body;
       await authService.verifyResetCode(email, code);
-      res.json({ message: 'Verification code valid' });
-    } catch (error) {
-      next(error);
+      res.json({
+        success: true,
+        message: 'Verification code valid'
+      });
+    } catch (error: any) {
+      res.status(400).json({
+        success: false,
+        message: error.message || 'Invalid verification code'
+      });
     }
   },
 
   resetPassword: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
-
       const { email, code, newPassword } = req.body;
       await authService.resetPassword(email, code, newPassword);
-      res.json({ message: 'Password reset successfully' });
-    } catch (error) {
-      next(error);
+      res.json({
+        success: true,
+        message: 'Password reset successfully'
+      });
+    } catch (error: any) {
+      res.status(400).json({
+        success: false,
+        message: error.message || 'Password reset failed'
+      });
     }
   },
 
@@ -85,18 +185,33 @@ export const authController = {
     try {
       const { refreshToken } = req.body;
       const tokens = await authService.refreshToken(refreshToken);
-      res.json(tokens);
-    } catch (error) {
-      next(error);
+      res.json({
+        success: true,
+        ...tokens
+      });
+    } catch (error: any) {
+      res.status(401).json({
+        success: false,
+        message: error.message || 'Token refresh failed'
+      });
     }
   },
 
   getCurrentUser: async (req: Request, res: Response) => {
     try {
       if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
-      res.json(req.user);
-    } catch (err) {
-      res.status(500).json({ message: 'Server error', error: err });
+
+      const user = await authService.getCurrentUser(req.user.id);
+      res.json({
+        success: true,
+        data: user
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        message: 'Server error',
+        error: err.message
+      });
     }
   }
 };

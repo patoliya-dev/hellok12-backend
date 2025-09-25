@@ -9,17 +9,26 @@ export interface JwtPayload {
   id: string;
   role?: string;
   action?: 'verify' | 'reset';
+  rememberMe?: boolean;
 }
 
 const signOptions: SignOptions = { expiresIn: config.jwtExpiresIn };
 const refreshSignOptions: SignOptions = { expiresIn: config.jwtRefreshExpiresIn };
 
-export const generateToken = (payload: JwtPayload): string => {
-  return jwt.sign(payload, config.jwtSecret as Secret, signOptions);
+export const generateToken = (payload: JwtPayload, expiresIn?: string): string => {
+  return jwt.sign(
+    payload,
+    config.jwtSecret as Secret,
+    { expiresIn: expiresIn || signOptions.expiresIn } as SignOptions
+  );
 };
 
-export const generateRefreshToken = (payload: JwtPayload): string => {
-  return jwt.sign(payload, config.jwtRefreshSecret as Secret, refreshSignOptions);
+export const generateRefreshToken = (payload: JwtPayload, expiresIn?: string): string => {
+  return jwt.sign(
+    payload,
+    config.jwtRefreshSecret as Secret,
+    { expiresIn: expiresIn || refreshSignOptions.expiresIn } as SignOptions
+  );
 };
 
 export const verifyToken = (token: string): JwtPayload => {

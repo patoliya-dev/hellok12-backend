@@ -59,7 +59,7 @@ const childSchema = z.object({
     })
   ]),
   gender: z.enum(['male', 'female', 'other'], {
-    errorMap: () => ({ message: 'Please select a valid gender' })
+    error: () => ({ message: 'Please select a valid gender' })
   })
 });
 
@@ -89,7 +89,7 @@ export const registrationSchema = z.object({
     .extend({
       // Role selection (matches your frontend)
       role: z.enum(['student', 'parent', 'teacher', 'school'], {
-        errorMap: () => ({ message: 'Please select a valid role' })
+        error: () => ({ message: 'Please select a valid role' })
       }),
 
       // Children array for parent registration

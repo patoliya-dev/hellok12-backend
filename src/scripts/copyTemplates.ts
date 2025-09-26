@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import Logger from '../src/utils/winstonLogger.utils';
+import Logger from '../utils/winstonLogger.utils';
 
 const srcDir = path.join(process.cwd(), 'src/templates'); // always points to src/templates
 const distDir = path.join(process.cwd(), 'dist/templates');

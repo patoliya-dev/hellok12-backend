@@ -85,14 +85,6 @@ export const authController = {
         user: result.user
       });
     } catch (error: any) {
-      // Handle specific error messages your frontend expects
-      if (error.message === 'Invalid credentials') {
-        return res.status(401).json({
-          success: false,
-          message: 'Wrong password. Try again or click Forgot password to reset it.'
-        });
-      }
-
       if (error.message === 'Email not verified') {
         return res.status(401).json({
           success: false,

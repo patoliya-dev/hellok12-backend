@@ -627,8 +627,7 @@ export const authService = {
       // Verify the code first
       const user = await authService.verifyResetCode(email, code);
 
-      const hashedPassword = await bcrypt.hash(newPassword, 12);
-      user.password = hashedPassword;
+      user.password = newPassword;
       await user.save();
 
       // Remove the reset token
@@ -721,7 +720,6 @@ export const authService = {
         email: payload.email!,
         phone: payload.phone!,
         password: payload.password!,
-        confirmPassword: payload.password!, // Same as password for legacy
         role: payload.role,
         children: payload.children?.map((child, index) => ({
           id: `legacy-${index}`,

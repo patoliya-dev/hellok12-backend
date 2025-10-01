@@ -69,20 +69,11 @@ const baseRegistrationSchema = z.object({
   email: emailSchema,
   phone: phoneSchema,
   password: strongPasswordSchema,
-  confirmPassword: z.string(),
   termsAccepted: z.boolean().refine(val => val === true, {
     message: 'You must accept the terms and conditions'
   }),
   marketingConsent: z.boolean().optional().default(false)
 });
-
-const refinedBaseRegistrationSchema = baseRegistrationSchema.refine(
-  data => data.password === data.confirmPassword,
-  {
-    message: 'Passwords do not match',
-    path: ['confirmPassword']
-  }
-);
 
 export const registrationSchema = z.object({
   body: baseRegistrationSchema
@@ -250,20 +241,14 @@ export const verifyResetCodeSchema = z.object({
 });
 
 export const resetPasswordSchema = z.object({
-  body: z
-    .object({
-      email: emailSchema,
-      code: z
-        .string()
-        .length(6, 'Verification code must be 6 digits')
-        .regex(/^\d{6}$/, 'Verification code must be 6 digits'),
-      newPassword: strongPasswordSchema,
-      confirmPassword: z.string()
-    })
-    .refine(data => data.newPassword === data.confirmPassword, {
-      message: 'Passwords do not match',
-      path: ['confirmPassword']
-    })
+  body: z.object({
+    email: emailSchema,
+    code: z
+      .string()
+      .length(6, 'Verification code must be 6 digits')
+      .regex(/^\d{6}$/, 'Verification code must be 6 digits'),
+    newPassword: strongPasswordSchema
+  })
 });
 
 // Email verification schemas
@@ -281,16 +266,10 @@ export const verifyEmailSchema = z.object({
 
 // Change password schema (for authenticated users)
 export const changePasswordSchema = z.object({
-  body: z
-    .object({
-      currentPassword: z.string().min(1, 'Current password is required'),
-      newPassword: strongPasswordSchema,
-      confirmPassword: z.string()
-    })
-    .refine(data => data.newPassword === data.confirmPassword, {
-      message: 'Passwords do not match',
-      path: ['confirmPassword']
-    })
+  body: z.object({
+    currentPassword: z.string().min(1, 'Current password is required'),
+    newPassword: strongPasswordSchema
+  })
 });
 
 // Update profile schema

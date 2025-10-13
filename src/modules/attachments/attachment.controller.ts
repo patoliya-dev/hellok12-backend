@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import crypto from 'crypto';
-import { makePresignedPost, headObject } from '../../utils/s3';
+import { headObject, makePresignedPost } from '../../utils/s3';
 import { AttachmentModel } from '../../models/attachment.model';
 
 const BUCKET = process.env.S3_BUCKET!;

@@ -6,7 +6,7 @@ import * as ctrl from './attachment.controller';
 import { authenticate } from '../../middlewares/auth';
 
 const r = Router();
-r.post('/attachments/presign', authenticate, validateBody(presignSchema), ctrl.presign);
-r.post('/attachments/complete', authenticate, validateBody(completeSchema), ctrl.complete);
-r.delete('/attachments/:id', authenticate, ctrl.softDelete);
+r.post('/presign', authenticate, validateBody(presignSchema), ctrl.presign);
+r.post('/complete', authenticate, validateBody(completeSchema), ctrl.complete);
+r.delete('/:id', authenticate, ctrl.softDelete);
 export default r;

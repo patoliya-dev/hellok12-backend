@@ -1,40 +1,46 @@
-// models/Course.ts
-import { Schema, model, Document, Types } from 'mongoose';
+// src/models/course.model.ts
+import mongoose, { Schema, InferSchemaType } from 'mongoose';
 
-export interface ICourse extends Document {
-  name: string;
-  language: string;
-  description?: string;
-  lessonType: 'online' | 'in-person';
-  introImage?: string;
-  options?: string[];
-  studentCapacity?: number; // Only for group lessons
-  pricePerLesson: number;
-  ageRange?: { min: number; max: number };
-  startDate: Date;
-  endDate: Date;
-  lessons: Types.ObjectId[];
-}
-
-const CourseSchema = new Schema<ICourse>(
+const CourseSchema = new Schema(
   {
-    name: { type: String, required: true },
-    language: { type: String, required: true },
-    description: { type: String },
-    lessonType: { type: String, enum: ['online', 'in-person'], required: true },
-    introImage: { type: String },
-    options: [{ type: String }],
-    studentCapacity: { type: Number },
-    pricePerLesson: { type: Number, required: true },
-    ageRange: {
-      min: { type: Number },
-      max: { type: Number }
+    // ownership for RBAC
+    ownerId: { type: String, required: true },
+
+    // UI fields
+    title: { type: String, required: true, maxlength: 120 },
+    language: { type: String, required: true, maxlength: 10 },
+    description: { type: String, default: '', maxlength: 4000 },
+    lessonType: { type: String, enum: ['group', 'one-on-one'], required: true },
+    studentCapacity: { type: Number, required: true, min: 1, max: 100000 },
+    mode: { type: String, enum: ['online', 'in-person'], required: true },
+
+    // age groups aligned to your constants
+    ageGroups: {
+      type: [String],
+      enum: ['3-5', '6-8', '9-12', '13-15', '16-18', '18+'],
+      required: true
     },
+
+    // intro image bound to Attachment
+    introImage: {
+      attachmentId: { type: String },
+      url: { type: String }
+    },
+
+    pricePerLesson: { type: Number, required: true, min: 0 },
+    currency: { type: String, default: 'USD', maxlength: 3 },
+
     startDate: { type: Date, required: true },
-    endDate: { type: Date, required: true },
-    lessons: [{ type: Schema.Types.ObjectId, ref: 'Lesson' }]
+    endDate: { type: Date, default: null },
+
+    // operational
+    published: { type: Boolean, default: false },
+    enrolledCount: { type: Number, default: 0 },
+    archivedAt: { type: Date, default: null }
   },
   { timestamps: true }
 );
 
-export const Course = model<ICourse>('Course', CourseSchema);
+CourseSchema.index({ ownerType: 1, ownerId: 1, title: 1 });
+export type CourseDoc = InferSchemaType<typeof CourseSchema> & { _id: string };
+export const CourseModel = mongoose.model('Course', CourseSchema);

@@ -1,5 +1,5 @@
 import express from 'express';
-import { authController } from '../controllers/auth.controller';
+import { authController } from '../modules/auth/auth.controller';
 import { authenticate } from '../middlewares/auth';
 import { validateRequest } from '../middlewares/validation';
 import {
@@ -8,7 +8,7 @@ import {
   forgotPasswordSchema,
   verifyResetCodeSchema,
   resetPasswordSchema
-} from '../schemas/auth.schemas';
+} from '../modules/auth/auth.schemas';
 
 const router = express.Router();
 

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import authRoutes from './auth.routes';
+import courseRoutes from '../modules/courses/course.routes';
 // Future imports:
 // import userRoutes from './user.routes';
 // import schoolRoutes from './school.routes';
@@ -10,6 +11,7 @@ const router = Router();
 
 // Prefix all routes with /api/v1 inside app.ts
 router.use('/auth', authRoutes);
+router.use('/courses', courseRoutes);
 
 // Future routes:
 // router.use('/users', userRoutes);

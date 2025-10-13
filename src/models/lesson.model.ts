@@ -1,43 +1,30 @@
-// models/Lesson.ts
-import { Schema, model, Document, Types } from 'mongoose';
+import mongoose, { Schema, InferSchemaType } from 'mongoose';
 
-export interface IWeeklySchedule {
-  day: string; // e.g., "Monday"
-  startTime: string; // e.g., "10:00"
-  endTime: string; // e.g., "11:00"
-}
-
-export interface ILesson extends Document {
-  course: Types.ObjectId;
-  title: string;
-  assignedTeacher: Types.ObjectId;
-  description?: string;
-  weeklySchedule: IWeeklySchedule[];
-  isTrialAvailable: boolean;
-  trialCapacity?: number;
-  isCurriculumAlignedGame: boolean;
-  vocabulary: Types.ObjectId[];
-}
-
-const LessonSchema = new Schema<ILesson>(
+const Session = new Schema(
   {
-    course: { type: Schema.Types.ObjectId, ref: 'Course', required: true },
-    title: { type: String, required: true },
-    assignedTeacher: { type: Schema.Types.ObjectId, ref: 'User', required: true },
-    description: { type: String },
-    weeklySchedule: [
-      {
-        day: { type: String, required: true },
-        startTime: { type: String, required: true },
-        endTime: { type: String, required: true }
-      }
-    ],
-    isTrialAvailable: { type: Boolean, default: false },
-    trialCapacity: { type: Number },
-    isCurriculumAlignedGame: { type: Boolean, default: false },
-    vocabulary: [{ type: Schema.Types.ObjectId, ref: 'Vocabulary' }]
+    startTime: { type: Date, required: true }, // e.g., 2025-08-22T10:00:00Z
+    durationMinutes: { type: Number, required: true, min: 1, max: 600 }
+  },
+  { _id: false }
+);
+
+const LessonSchema = new Schema(
+  {
+    courseId: { type: String, required: true },
+    title: { type: String, required: true, maxlength: 120 },
+    description: { type: String, default: '', maxlength: 4000 },
+    teacher: { type: Schema.Types.ObjectId, ref: 'TeacherProfile' },
+    sessions: { type: [Session], default: [] }, // corresponds to Weekly Schedule date+times   /*********** need to check *************/
+    trialAvailable: { type: Boolean, default: false },
+    trialCapacity: { type: Number, default: 0, min: 0 },
+    orderIndex: { type: Number, default: 1 },
+    published: { type: Boolean, default: false },
+    archivedAt: { type: Date, default: null }
   },
   { timestamps: true }
 );
 
-export const Lesson = model<ILesson>('Lesson', LessonSchema);
+LessonSchema.index({ courseId: 1, orderIndex: 1 });
+
+export type LessonDoc = InferSchemaType<typeof LessonSchema> & { _id: string };
+export const LessonModel = mongoose.model('Lesson', LessonSchema);

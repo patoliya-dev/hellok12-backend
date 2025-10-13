@@ -1,4 +1,4 @@
-export const COURSE_TYPES = {
+export const COURSE_MODE = {
   ONLINE: 'online',
   IN_PERSON: 'in-person'
 } as const;
@@ -27,21 +27,6 @@ export const USER_ROLES = {
 // Fix: Remove 'as const' to make arrays mutable for Zod
 export const AGE_GROUPS = ['3-5', '6-8', '9-12', '13-15', '16-18', '18+'];
 
-export const LANGUAGES = [
-  'English',
-  'Spanish',
-  'French',
-  'German',
-  'Italian',
-  'Portuguese',
-  'Chinese',
-  'Japanese',
-  'Korean',
-  'Arabic'
-];
-
-export const LANGUAGE_LEVELS = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
-
 export const DAYS_OF_WEEK = [
   'monday',
   'tuesday',
@@ -53,11 +38,9 @@ export const DAYS_OF_WEEK = [
 ];
 
 // Type definitions for better type safety
-export type CourseType = (typeof COURSE_TYPES)[keyof typeof COURSE_TYPES];
+export type CourseMode = (typeof COURSE_MODE)[keyof typeof COURSE_MODE];
 export type LessonType = (typeof LESSON_TYPES)[keyof typeof LESSON_TYPES];
 export type BookingStatus = (typeof BOOKING_STATUS)[keyof typeof BOOKING_STATUS];
 export type UserRole = (typeof USER_ROLES)[keyof typeof USER_ROLES];
 export type AgeGroup = (typeof AGE_GROUPS)[number];
-export type Language = (typeof LANGUAGES)[number];
-export type LanguageLevel = (typeof LANGUAGE_LEVELS)[number];
 export type DayOfWeek = (typeof DAYS_OF_WEEK)[number];

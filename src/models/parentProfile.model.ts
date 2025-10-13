@@ -9,5 +9,7 @@ const ParentProfileSchema = new Schema(
   { timestamps: true }
 );
 
+ParentProfileSchema.index({ user: 1 }, { unique: true });
+
 export type ParentProfileDoc = InferSchemaType<typeof ParentProfileSchema> & { _id: string };
 export const ParentProfileModel = mongoose.model('ParentProfile', ParentProfileSchema);

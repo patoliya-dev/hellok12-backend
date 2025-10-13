@@ -11,5 +11,7 @@ const SchoolProfileSchema = new Schema(
   { timestamps: true }
 );
 
+SchoolProfileSchema.index({ user: 1 }, { unique: true });
+
 export type SchoolProfileDoc = InferSchemaType<typeof SchoolProfileSchema> & { _id: string };
 export const SchoolProfileModel = mongoose.model('SchoolProfile', SchoolProfileSchema);

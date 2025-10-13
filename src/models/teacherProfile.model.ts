@@ -43,5 +43,7 @@ const TeacherProfileSchema = new Schema(
   { timestamps: true }
 );
 
+TeacherProfileSchema.index({ user: 1 }, { unique: true });
+
 export type TeacherProfileDoc = InferSchemaType<typeof TeacherProfileSchema> & { _id: string };
 export const TeacherProfileModel = mongoose.model('TeacherProfile', TeacherProfileSchema);

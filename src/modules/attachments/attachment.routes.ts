@@ -1,4 +1,3 @@
-// src/modules/attachments/attachment.routes.ts
 import { Router } from 'express';
 import { validateBody } from '../../middlewares/validation';
 import { presignSchema, completeSchema } from './attachment.schemas';

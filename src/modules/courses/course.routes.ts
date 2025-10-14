@@ -1,22 +1,35 @@
-// src/modules/courses/course.routes.ts
-import { Router } from 'express';
-import { validateBody, validateQuery } from '../../middlewares/validation';
-import { createCourseSchema, updateCourseSchema, listCourseQuery } from './course.schemas';
-import * as ctrl from './course.controller';
-import { authenticate } from '../../middlewares/auth'; // <-- your existing file
+import { Router, Request, Response, NextFunction } from 'express';
+import { authenticate, authorize } from '../../middlewares/auth';
+import { USER_ROLES } from '../../utils/constants';
+import * as courseCtrl from './course.controller';
+import * as lessonCtrl from '../lessons/lesson.controller';
+
+// ownership guard (school or teacher must own the resource for mutating ops)
+// for list/create we derive owner from req.user in controller; here we ensure roles
+function requireCourseOwnerRole(req: Request, res: Response, next: NextFunction) {
+  if (req.user?.role === USER_ROLES.SCHOOL || req.user?.role === USER_ROLES.TEACHER) return next();
+  return res
+    .status(403)
+    .json({ success: false, message: 'Forbidden', error: 'Forbidden', statusCode: 403 });
+}
 
 const r = Router();
 
-// protected writes
-r.post('/', authenticate, validateBody(createCourseSchema), ctrl.createCourse);
-r.patch('/:courseId', authenticate, validateBody(updateCourseSchema), ctrl.updateCourse);
-r.post('/:courseId/publish', authenticate, ctrl.publishCourse);
-r.post('/:courseId/unpublish', authenticate, ctrl.unpublishCourse);
-r.post('/:courseId/archive', authenticate, ctrl.archiveCourse);
-r.post('/:courseId/restore', authenticate, ctrl.restoreCourse);
+r.get('/', authenticate, courseCtrl.listCourses); // dashboard list (scoped by owner)
+r.get('/:id', authenticate, courseCtrl.getCourseDetail);
 
-// public reads
-r.get('/', validateQuery(listCourseQuery), ctrl.listCourses);
-r.get('/:courseId', ctrl.getCourse);
+r.post('/', authenticate, requireCourseOwnerRole, courseCtrl.createCourse);
+r.patch('/:id', authenticate, requireCourseOwnerRole, courseCtrl.updateCourse);
+r.delete('/:id', authenticate, requireCourseOwnerRole, courseCtrl.deleteCourse);
+r.post('/:id/duplicate', authenticate, requireCourseOwnerRole, courseCtrl.duplicateCourse);
+
+// lesson routes with course dependency
+r.get('/:courseId/lessons', authenticate, lessonCtrl.listLessonsForCourse);
+r.post(
+  '/:courseId/lessons/reorder',
+  authenticate,
+  authorize([USER_ROLES.SCHOOL, USER_ROLES.TEACHER]),
+  lessonCtrl.reorderLessons
+);
 
 export default r;

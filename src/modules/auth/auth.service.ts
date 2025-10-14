@@ -13,6 +13,10 @@ import {
   TeacherRegistrationInput,
   SchoolRegistrationInput
 } from './auth.schemas';
+import { StudentProfileModel } from '../../models/studentProfile.model';
+import { ParentProfileModel } from '../../models/parentProfile.model';
+import { TeacherProfileModel } from '../../models/teacherProfile.model';
+import { SchoolProfileModel } from '../../models/schoolProfile.model';
 
 export interface AuthResult {
   user: {
@@ -84,15 +88,14 @@ export const authService = {
         phone: data.phone,
         isVerified: false,
         termsAccepted: data.termsAccepted,
-        marketingConsent: data.marketingConsent || false,
-        profile: {
-          grade: data.grade,
-          registrationSource: 'direct' // Independent student
-        }
+        marketingConsent: data.marketingConsent || false
       };
 
       const user = new User(userData);
       await user.save();
+
+      const studentProfile = new StudentProfileModel({ user: user._id });
+      await studentProfile.save();
 
       // Send student-specific verification email
       const verificationToken = generateRefreshToken({
@@ -138,13 +141,10 @@ export const authService = {
         phone: data.phone,
         isVerified: false,
         termsAccepted: data.termsAccepted,
-        marketingConsent: data.marketingConsent || false,
-        profile: {
-          address: data.address,
-          registrationSource: 'parent_with_children'
-        }
+        marketingConsent: data.marketingConsent || false
       };
 
+      // Save user collection
       const parent = new User(parentData);
       await parent.save();
 
@@ -159,23 +159,28 @@ export const authService = {
           role: 'student',
           parent: parent._id,
           isVerified: true, // Children are auto-verified through parent
-          termsAccepted: true, // Inherited from parent
-          profile: {
-            age: childData.age,
-            gender: childData.gender,
-            registrationSource: 'parent_created',
-            childIndex: i + 1 // Child 1, Child 2, etc. (from PDF)
-          }
+          termsAccepted: true // Inherited from parent
         });
 
+        const childProfile = new StudentProfileModel({
+          user: childUser._id,
+          age: childData.age,
+          gender: childData.gender
+        });
+
+        await childProfile.save();
         await childUser.save();
         children.push(childUser);
         childIds.push(childUser._id);
       }
 
-      // Update parent with children IDs
-      parent.children = childIds;
-      await parent.save();
+      // Save parent profile collection
+      const parentProfile = new ParentProfileModel({
+        user: parent._id,
+        address: data.address,
+        children: childIds
+      });
+      await parentProfile.save();
 
       // Send parent-specific verification email
       const verificationToken = generateRefreshToken({
@@ -224,19 +229,15 @@ export const authService = {
         phone: data.phone,
         isVerified: false,
         termsAccepted: data.termsAccepted,
-        marketingConsent: data.marketingConsent || false,
-        profile: {
-          bio: data.bio,
-          experience: data.experience || 0,
-          languages: data.languages || [],
-          employmentType: data.employmentType || 'independent',
-          hourlyRate: data.hourlyRate,
-          registrationSource: 'teacher_application'
-        }
+        marketingConsent: data.marketingConsent || false
       };
 
       const user = new User(userData);
       await user.save();
+
+      // Save teacher profile collection
+      const teacherProfile = new TeacherProfileModel({ user: user._id });
+      await teacherProfile.save();
 
       // Send teacher-specific verification email
       const verificationToken = generateRefreshToken({
@@ -277,20 +278,15 @@ export const authService = {
         phone: data.phone,
         isVerified: false,
         termsAccepted: data.termsAccepted,
-        marketingConsent: data.marketingConsent || false,
-        profile: {
-          schoolName: data.schoolName,
-          address: data.address,
-          description: data.description,
-          website: data.website,
-          registrationSource: 'school_application',
-          status: 'pending_approval' // Schools need admin approval
-        }
+        marketingConsent: data.marketingConsent || false
       };
 
       const user = new User(userData);
       await user.save();
 
+      // Save school profile collection
+      const schoolProfile = new SchoolProfileModel({ user: user._id, schoolName: data.schoolName });
+      await schoolProfile.save();
       // Send school-specific verification email
       const verificationToken = generateRefreshToken({
         id: user._id.toString(),
@@ -328,10 +324,7 @@ export const authService = {
     rememberMe: boolean = false
   ): Promise<AuthResult> => {
     try {
-      const user = await User.findOne({ email: email.toLowerCase() }).populate(
-        'children',
-        'name profile.age profile.gender'
-      );
+      const user = await User.findOne({ email: email.toLowerCase() });
 
       if (!user) {
         throw new Error('Invalid credentials'); // Matches PDF "Wrong password" message
@@ -405,10 +398,7 @@ export const authService = {
           email: user.email!,
           name: user.name,
           role: user.role,
-          isVerified: user.isVerified,
-          children: user.role === 'parent' ? user.children : undefined,
-          profile: user.profile,
-          schoolName: user.profile?.schoolName
+          isVerified: user.isVerified
         },
         accessToken,
         refreshToken,
@@ -676,12 +666,22 @@ export const authService = {
   },
 
   // Get Current User
-  getCurrentUser: async (userId: string): Promise<AuthResult['user']> => {
+  getCurrentUser: async (userId: string, role: string): Promise<AuthResult['user']> => {
     try {
-      const user = await User.findById(userId)
-        .select('-password')
-        .populate('children', 'name profile.age profile.gender')
-        .populate('school', 'name');
+      let populateQuery: any = { path: `${role}Profile` };
+
+      if (role === 'parent') {
+        populateQuery = {
+          path: 'parentProfile',
+          populate: {
+            path: 'children',
+            populate: {
+              path: 'studentProfile'
+            }
+          }
+        };
+      }
+      const user: any = await User.findById(userId).populate(populateQuery).lean();
 
       if (!user) {
         throw new Error('User not found');
@@ -694,11 +694,67 @@ export const authService = {
         role: user.role,
         isVerified: user.isVerified,
         children: user.role === 'parent' ? user.children : undefined,
-        profile: user.profile,
-        schoolName: user.profile?.schoolName
+        profile: user[`${role}Profile`],
+        schoolName: user[`${role}Profile`]?.schoolName
       };
     } catch (error) {
       Logger.error('Get current user failed:', error);
+      throw error;
+    }
+  },
+
+  updateCurrentUser: async (userId: string, body: any): Promise<any> => {
+    // const session = await mongoose.startSession();
+    // session.startTransaction();
+
+    try {
+      const userUpdateFields = {
+        name: body.name,
+        email: body.email,
+        phone: body.phone
+      };
+
+      const updateUser = await User.findByIdAndUpdate(userId, userUpdateFields, {
+        new: true
+      });
+
+      if (!updateUser) throw new Error('User not found');
+
+      if (body.role) {
+        const profileModels: Record<string, any> = {
+          student: StudentProfileModel,
+          parent: ParentProfileModel,
+          teacher: TeacherProfileModel,
+          school: SchoolProfileModel
+        };
+        const field = `${body.role}Profile`;
+        const Model = profileModels[body.role];
+
+        if (Model && body.profile) {
+          await Model.findOneAndUpdate({ user: userId }, body.profile, { new: true });
+        }
+      }
+
+      // await session.commitTransaction();
+      // await session.endSession();
+
+      let populateQuery: any = { path: `${body.role}Profile` };
+
+      if (body.role === 'parent') {
+        populateQuery = {
+          path: 'parentProfile',
+          populate: {
+            path: 'children',
+            populate: {
+              path: 'studentProfile'
+            }
+          }
+        };
+      }
+      const populatedUser = await User.findById(userId).populate(populateQuery).lean();
+      return populatedUser;
+    } catch (error) {
+      Logger.error('Update current user failed:', error);
       throw error;
     }
   },

@@ -204,13 +204,6 @@ const UserSchema = new Schema<IUser>(
       }
     },
 
-    children: [
-      {
-        type: Schema.Types.ObjectId,
-        ref: 'User'
-      }
-    ],
-
     // Authentication fields
     isVerified: {
       type: Boolean,
@@ -263,12 +256,6 @@ const UserSchema = new Schema<IUser>(
       default: true
     },
 
-    // Extended Profile (flexible structure for role-specific data)
-    profile: {
-      type: Schema.Types.Mixed,
-      default: {}
-    },
-
     // Status Management
     status: {
       type: String,
@@ -309,19 +296,16 @@ UserSchema.index({ email: 1 });
 UserSchema.index({ role: 1, status: 1 });
 UserSchema.index({ parent: 1 });
 UserSchema.index({ school: 1 });
-UserSchema.index({ 'profile.registrationSource': 1 });
 UserSchema.index({ createdAt: -1 });
 UserSchema.index({ lastLogin: -1 });
 
 // Compound indexes
 UserSchema.index({ role: 1, isVerified: 1, status: 1 });
-UserSchema.index({ role: 1, 'profile.languages': 1 }); // For teacher search
 
 // Text search index for name and email
 UserSchema.index({
   name: 'text',
-  email: 'text',
-  'profile.bio': 'text'
+  email: 'text'
 });
 
 // Virtual fields
@@ -341,6 +325,34 @@ UserSchema.virtual('dashboardUrl').get(function (this: IUser) {
     school: '/school/dashboard'
   };
   return dashboardUrls[this.role] || '/dashboard';
+});
+
+UserSchema.virtual('studentProfile', {
+  ref: 'StudentProfile',
+  localField: '_id',
+  foreignField: 'user',
+  justOne: true
+});
+
+UserSchema.virtual('parentProfile', {
+  ref: 'ParentProfile',
+  localField: '_id',
+  foreignField: 'user',
+  justOne: true
+});
+
+UserSchema.virtual('teacherProfile', {
+  ref: 'TeacherProfile',
+  localField: '_id',
+  foreignField: 'user',
+  justOne: true
+});
+
+UserSchema.virtual('schoolProfile', {
+  ref: 'SchoolProfile',
+  localField: '_id',
+  foreignField: 'user',
+  justOne: true
 });
 
 // Pre-save middleware
@@ -364,14 +376,6 @@ UserSchema.pre('save', async function (next) {
   if (this.isNew && this.role === 'student' && this.parent && !this.isVerified) {
     this.isVerified = true;
     this.status = 'active';
-  }
-
-  // Set profile defaults based on role
-  if (this.isNew && !this.profile?.registrationSource) {
-    this.profile = this.profile || {};
-    this.profile.registrationSource = this.parent ? 'parent_created' : 'direct';
-    this.profile.profileCompleted = false;
-    this.profile.onboardingCompleted = false;
   }
 
   next();

@@ -20,7 +20,6 @@ export const authenticate = async (
   try {
     const authHeader = req.headers.authorization;
     const token = authHeader?.split(' ')[1];
-    console.log('token', token);
 
     if (!token) {
       res.status(401).json(createErrorResponse('No token provided', 'Unauthorized', 401));
@@ -29,10 +28,8 @@ export const authenticate = async (
 
     const secret = JWT_SECRET || 'secret';
     const decoded = jwt.verify(token, secret) as UserPayload;
-
     // Verify user exists in database
     const user = await User.findById(decoded.id).select('-password');
-    console.log('user', user);
 
     if (!user) {
       res.status(404).json(createErrorResponse('User not found', 'User not found', 404));
@@ -55,8 +52,6 @@ export const authenticate = async (
 
     next();
   } catch (error) {
-    console.log('error', error);
-
     if (error instanceof jwt.TokenExpiredError) {
       res.status(401).json(createErrorResponse('Token expired', 'Token Expired', 401));
     } else if (error instanceof jwt.JsonWebTokenError) {

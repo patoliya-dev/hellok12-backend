@@ -228,5 +228,48 @@ export const authController = {
         error: err.message
       });
     }
+  },
+
+  deleteChildren: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { childrenId } = req.params as { childrenId: string };
+      const userId = req.user?.id;
+      if (!userId) {
+        return res.status(401).json(createErrorResponse('Unauthorized', 'Unauthorized', 401));
+      }
+      await authService.deleteChildren(userId, childrenId);
+      res.json({
+        success: true,
+        message: 'Children deleted successfully'
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        message: 'Server error',
+        error: err.message
+      });
+    }
+  },
+
+  addStudentToParent: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { studentData } = req.body;
+      const userId = req.user?.id;
+      if (!userId) {
+        return res.status(401).json(createErrorResponse('Unauthorized', 'Unauthorized', 401));
+      }
+      const user = await authService.addStudentToParent(userId, studentData);
+      res.json({
+        success: true,
+        message: 'Student added successfully',
+        data: user
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        message: 'Server error',
+        error: err.message
+      });
+    }
   }
 };

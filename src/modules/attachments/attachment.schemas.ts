@@ -15,3 +15,7 @@ export const completeSchema = z.object({
   entityType: z.string().optional(),
   entityId: z.string().optional()
 });
+export const updateSchema = z.object({
+  attachmentId: z.string().min(1),
+  key: z.string().min(1).optional()
+});

@@ -355,6 +355,14 @@ UserSchema.virtual('schoolProfile', {
   justOne: true
 });
 
+UserSchema.virtual('profileImage', {
+  ref: 'Attachment',
+  localField: '_id',
+  foreignField: 'entityId',
+  justOne: true,
+  match: { entityType: 'User', status: 'READY' }
+});
+
 // Pre-save middleware
 UserSchema.pre('save', async function (next) {
   // Hash password if modified

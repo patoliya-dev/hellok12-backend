@@ -17,6 +17,7 @@ import { StudentProfileModel } from '../../models/studentProfile.model';
 import { ParentProfileModel } from '../../models/parentProfile.model';
 import { TeacherProfileModel } from '../../models/teacherProfile.model';
 import { SchoolProfileModel } from '../../models/schoolProfile.model';
+import { AttachmentModel } from '../../models/attachment.model';
 
 export interface AuthResult {
   user: {
@@ -28,6 +29,7 @@ export interface AuthResult {
     children?: any[];
     profile?: any;
     schoolName?: string;
+    profileImage?: any;
   };
   accessToken?: string;
   refreshToken?: string;
@@ -675,13 +677,18 @@ export const authService = {
           path: 'parentProfile',
           populate: {
             path: 'children',
-            populate: {
-              path: 'studentProfile'
-            }
+            populate: [
+              { path: 'studentProfile' },
+              { path: 'profileImage', match: { status: 'READY' }, select: 'url' }
+            ]
           }
         };
       }
-      const user: any = await User.findById(userId).populate(populateQuery).lean();
+
+      const user: any = await User.findById(userId)
+        .populate({ path: 'profileImage', match: { status: 'READY' }, select: 'url' })
+        .populate(populateQuery)
+        .lean({ virtuals: true });
 
       if (!user) {
         throw new Error('User not found');
@@ -695,7 +702,8 @@ export const authService = {
         isVerified: user.isVerified,
         children: user.role === 'parent' ? user.children : undefined,
         profile: user[`${role}Profile`],
-        schoolName: user[`${role}Profile`]?.schoolName
+        schoolName: user[`${role}Profile`]?.schoolName,
+        profileImage: user?.profileImage
       };
     } catch (error) {
       Logger.error('Get current user failed:', error);
@@ -706,55 +714,149 @@ export const authService = {
   updateCurrentUser: async (userId: string, body: any): Promise<any> => {
     // const session = await mongoose.startSession();
     // session.startTransaction();
-
     try {
-      const userUpdateFields = {
-        name: body.name,
-        email: body.email,
-        phone: body.phone
-      };
+      const allowedUserFields = ['name', 'email', 'phone'];
+      const userUpdateFields: Record<string, any> = {};
 
-      const updateUser = await User.findByIdAndUpdate(userId, userUpdateFields, {
-        new: true
-      });
+      for (const key of allowedUserFields) {
+        if (body[key] !== undefined) userUpdateFields[key] = body[key];
+      }
+
+      let updateUser;
+      if (Object.keys(userUpdateFields).length > 0) {
+        updateUser = await User.findByIdAndUpdate(
+          userId,
+          { $set: userUpdateFields },
+          { new: true }
+        );
+      } else {
+        updateUser = await User.findById(userId);
+      }
 
       if (!updateUser) throw new Error('User not found');
 
-      if (body.role) {
-        const profileModels: Record<string, any> = {
-          student: StudentProfileModel,
-          parent: ParentProfileModel,
-          teacher: TeacherProfileModel,
-          school: SchoolProfileModel
-        };
-        const field = `${body.role}Profile`;
-        const Model = profileModels[body.role];
+      const profileModels: Record<string, any> = {
+        student: StudentProfileModel,
+        parent: ParentProfileModel,
+        teacher: TeacherProfileModel,
+        school: SchoolProfileModel
+      };
+      const role = body.role || updateUser.role;
+      const Model = profileModels[role];
 
-        if (Model && body.profile) {
-          await Model.findOneAndUpdate({ user: userId }, body.profile, { new: true });
-        }
+      if (Model && body.profile) {
+        await Model.findOneAndUpdate(
+          { user: userId },
+          { $set: body.profile },
+          { new: true, runValidators: true, omitUndefined: true }
+        );
       }
 
       // await session.commitTransaction();
       // await session.endSession();
 
-      let populateQuery: any = { path: `${body.role}Profile` };
-
-      if (body.role === 'parent') {
+      let populateQuery: any = { path: `${role}Profile` };
+      if (role === 'parent') {
         populateQuery = {
           path: 'parentProfile',
           populate: {
             path: 'children',
-            populate: {
-              path: 'studentProfile'
-            }
+            populate: { path: 'studentProfile' }
           }
         };
       }
+
       const populatedUser = await User.findById(userId).populate(populateQuery).lean();
       return populatedUser;
     } catch (error) {
+      // await session.abortTransaction();
+      // await session.endSession();
       Logger.error('Update current user failed:', error);
+      throw error;
+    }
+  },
+
+  deleteChildren: async (userId: string, childrenId: string) => {
+    try {
+      const parentProfile = await ParentProfileModel.findOne({ user: userId }).lean();
+      if (!parentProfile) throw new Error('Parent not found');
+
+      const isChildLinked = parentProfile.children.some(c => c.toString() === childrenId);
+      if (!isChildLinked) throw new Error('Child not found');
+
+      await StudentProfileModel.findOneAndDelete({ user: childrenId });
+
+      await AttachmentModel.updateMany({ uploadedBy: childrenId }, { $set: { status: 'DELETED' } });
+
+      await User.findByIdAndDelete(childrenId);
+
+      await ParentProfileModel.findOneAndUpdate(
+        { user: userId },
+        { $pull: { children: childrenId } },
+        { new: true }
+      );
+
+      Logger.info('Children deleted successfully', { userId, childrenId });
+    } catch (error) {
+      Logger.error('Delete children failed:', error);
+      throw error;
+    }
+  },
+
+  addStudentToParent: async (userId: string, studentData: any) => {
+    try {
+      const parent = await User.findById(userId).populate('parentProfile').lean();
+      if (!parent) throw new Error('Parent not found');
+
+      if (parent.role !== 'parent') {
+        throw new Error('Parent must be a parent');
+      }
+
+      const studentUser = await User.create({
+        name: studentData.name,
+        email: studentData.email,
+        password: studentData.password,
+        role: 'student',
+        phone: studentData.phone,
+        isVerified: true,
+        termsAccepted: studentData.termsAccepted,
+        parent: parent._id
+      });
+
+      const studentProfile = new StudentProfileModel({
+        user: studentUser._id,
+        address: studentData.address,
+        age: studentData.age,
+        gender: studentData.gender,
+        languages: studentData.languages
+      });
+
+      await studentProfile.save();
+
+      await ParentProfileModel.findOneAndUpdate(
+        { user: userId },
+        { $push: { children: studentUser._id } },
+        { new: true }
+      );
+
+      const updatedParent = await User.findById(userId)
+        .populate({
+          path: 'parentProfile',
+          populate: {
+            path: 'children',
+            populate: [
+              { path: 'studentProfile' },
+              { path: 'profileImage', match: { status: 'READY' }, select: 'url' }
+            ]
+          }
+        })
+        .populate('profileImage')
+        .lean({ virtuals: true });
+
+      Logger.info('Student added successfully', { userId, studentId: studentUser._id });
+      return updatedParent;
+    } catch (error) {
+      Logger.error('Add student to parent failed:', error);
       throw error;
     }
   },

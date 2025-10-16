@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { authService } from './auth.service';
 import { createErrorResponse } from '../../utils/apiResponse';
+import { body } from 'express-validator';
 
 export const authController = {
   signup: async (req: Request, res: Response, next: NextFunction) => {
@@ -210,7 +211,7 @@ export const authController = {
 
   updateCurrentUser: async (req: Request, res: Response) => {
     try {
-      const userId = req?.user?.id;
+      const { userId } = req.params;
       if (!userId) {
         return res.status(401).json(createErrorResponse('Unauthorized', 'Unauthorized', 401));
       }
@@ -253,12 +254,11 @@ export const authController = {
 
   addStudentToParent: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { studentData } = req.body;
       const userId = req.user?.id;
       if (!userId) {
         return res.status(401).json(createErrorResponse('Unauthorized', 'Unauthorized', 401));
       }
-      const user = await authService.addStudentToParent(userId, studentData);
+      const user = await authService.addStudentToParent(userId, req.body);
       res.json({
         success: true,
         message: 'Student added successfully',

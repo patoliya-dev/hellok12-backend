@@ -112,7 +112,7 @@ export const complete = async (req: Request, res: Response) => {
 /**
  * Marks an uploaded S3 file as completed and update an Attachment record
  * This endpoint should be called AFTER the frontend successfully uploads to S3 using a presigned URL if attachmentId exists.
- * @returns {status: 200, data: Attachment}
+ * @returns {status: 200, success: true, message: "Attachment updated successfully", data: Attachment}
  */
 export const updateAttachment = async (req: Request, res: Response) => {
   const { attachmentId, key } = req.body;
@@ -144,10 +144,12 @@ export const updateAttachment = async (req: Request, res: Response) => {
       }
 
       // Update key and related fields if file changed
+      attachment.name = key.split('/').pop();
       attachment.key = key;
       attachment.url = `${BASE}/${key}`;
       attachment.size = head.ContentLength || 0;
       attachment.mime = head.ContentType || '';
+      attachment.etag = String(head.ETag).replace(/"/g, '');
     }
 
     const updatedAttachment = await attachment.save();

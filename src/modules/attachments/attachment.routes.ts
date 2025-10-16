@@ -9,6 +9,6 @@ const r = Router();
 r.post('/presign', authenticate, validateBody(presignSchema), ctrl.presign);
 r.post('/complete', authenticate, validateBody(completeSchema), ctrl.complete);
 r.delete('/:id', authenticate, ctrl.softDelete);
-r.patch('/:id', authenticate, validateBody(updateSchema), ctrl.updateAttachment);
+r.patch('/update', authenticate, validateBody(updateSchema), ctrl.updateAttachment);
 
 export default r;

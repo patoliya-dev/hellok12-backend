@@ -28,7 +28,7 @@ router.post(
 router.post('/reset-password', validateRequest(resetPasswordSchema), authController.resetPassword);
 router.post('/refresh-token', authController.refreshToken);
 router.get('/me', authenticate, authController.getCurrentUser);
-router.patch('/updateProfile', authenticate, authController.updateCurrentUser);
+router.patch('/updateProfile/:userId', authenticate, authController.updateCurrentUser);
 router.delete('/deleteChildren/:childrenId', authenticate, authController.deleteChildren);
 router.post('/addStudentToParent', authenticate, authController.addStudentToParent);
 

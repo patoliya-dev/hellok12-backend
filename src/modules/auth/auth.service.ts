@@ -30,6 +30,7 @@ export interface AuthResult {
     profile?: any;
     schoolName?: string;
     profileImage?: any;
+    phone?: string;
   };
   accessToken?: string;
   refreshToken?: string;
@@ -699,6 +700,7 @@ export const authService = {
         email: user.email!,
         name: user.name,
         role: user.role,
+        phone: user.phone,
         isVerified: user.isVerified,
         children: user.role === 'parent' ? user.children : undefined,
         profile: user[`${role}Profile`],
@@ -732,10 +734,9 @@ export const authService = {
       } else {
         updateUser = await User.findById(userId);
       }
-
       if (!updateUser) throw new Error('User not found');
 
-      const profileModels: Record<string, any> = {
+      const profileModels: any = {
         student: StudentProfileModel,
         parent: ParentProfileModel,
         teacher: TeacherProfileModel,
@@ -751,7 +752,6 @@ export const authService = {
           { new: true, runValidators: true, omitUndefined: true }
         );
       }
-
       // await session.commitTransaction();
       // await session.endSession();
 
@@ -765,8 +765,10 @@ export const authService = {
           }
         };
       }
-
-      const populatedUser = await User.findById(userId).populate(populateQuery).lean();
+      const populatedUser = await User.findById(userId)
+        .populate(populateQuery)
+        .select('-password')
+        .lean();
       return populatedUser;
     } catch (error) {
       // await session.abortTransaction();
@@ -815,20 +817,18 @@ export const authService = {
       const studentUser = await User.create({
         name: studentData.name,
         email: studentData.email,
-        password: studentData.password,
         role: 'student',
         phone: studentData.phone,
         isVerified: true,
-        termsAccepted: studentData.termsAccepted,
         parent: parent._id
       });
 
       const studentProfile = new StudentProfileModel({
         user: studentUser._id,
-        address: studentData.address,
-        age: studentData.age,
-        gender: studentData.gender,
-        languages: studentData.languages
+        address: studentData?.profile?.address,
+        age: studentData?.profile?.age,
+        gender: studentData?.profile?.gender,
+        languages: studentData?.profile?.languages
       });
 
       await studentProfile.save();

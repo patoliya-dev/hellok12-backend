@@ -1,24 +1,44 @@
 import { FilterQuery, Types } from 'mongoose';
 import { Course, CourseDoc } from '../../models/course.model';
 import { Lesson } from '../../models/lesson.model';
+import { CourseCreateDTO } from './course.schemas';
 
 export const CourseService = {
-  async create(data: Partial<CourseDoc>, owner: { role: 'school' | 'teacher'; id: string }) {
+  async create(data: CourseCreateDTO, owner: { role: 'school' | 'teacher'; id: string }) {
     const payload: Partial<CourseDoc> = {
-      ...data,
+      title: data.title,
+      description: data.description ?? '',
+      language: data.language,
+      lessonType: data.lessonType,
+      studentCapacity: data.studentCapacity ?? 1,
+      mode: data.mode,
+      pricePerLesson: data.pricePerLesson,
+      currency: data.currency ?? 'USD',
+      ageGroups: data.ageGroups,
+      startDate: data.startDate,
+      endDate: data.endDate ?? null,
+
+      // cast if present
+      introImageRef: data.introImageRef ? new Types.ObjectId(data.introImageRef) : null,
+
       ownerType: owner.role,
       ownerId: new Types.ObjectId(owner.id),
-      isTrialAvailable: false
+
+      status: data.status ?? 'draft',
+      isTrialAvailable: false,
+      enrolledCount: 0
     };
+    // const payload: Partial<CourseDoc> = {
+    //   ...data,
+    //   ownerType: owner.role,
+    //   ownerId: new Types.ObjectId(owner.id),
+    //   isTrialAvailable: false
+    // };
     const doc = await Course.create(payload);
     return doc.toObject();
   },
 
-  async update(
-    id: string,
-    data: Partial<CourseDoc>,
-    owner?: { role: 'school' | 'teacher'; id: string }
-  ) {
+  async update(id: string, data: any, owner?: { role: 'school' | 'teacher'; id: string }) {
     // ownership check (if provided from route-level guard)
     const filter: FilterQuery<CourseDoc> = { _id: id };
     if (owner) {
@@ -79,7 +99,7 @@ export const CourseService = {
   },
 
   async getById(id: string) {
-    const course = await Course.findById(id).lean();
+    const course = await Course.findById(id).populate('introImageRef', 'url').lean();
     if (!course) return null;
     // fetch lessons separately (no aggregation)
     const lessons = await Lesson.find({ courseId: id }).sort({ order: 1, date: 1 }).lean();

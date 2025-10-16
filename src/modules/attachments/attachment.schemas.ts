@@ -15,3 +15,10 @@ export const completeSchema = z.object({
   entityType: z.string().optional(),
   entityId: z.string().optional()
 });
+
+export const claimSchema = z.object({
+  entityType: z.string().optional(),
+  entityId: z.string().optional(),
+  moveToEntityPrefix: z.boolean().optional(),
+  scope: z.string().optional()
+});

@@ -4,7 +4,7 @@ export const COURSE_MODE = {
 } as const;
 
 export const LESSON_TYPES = {
-  ONE_ON_ONE: 'one-on-one',
+  ONE_ON_ONE: '1-on-1',
   GROUP: 'group'
 } as const;
 

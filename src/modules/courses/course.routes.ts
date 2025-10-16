@@ -3,6 +3,8 @@ import { authenticate, authorize } from '../../middlewares/auth';
 import { USER_ROLES } from '../../utils/constants';
 import * as courseCtrl from './course.controller';
 import * as lessonCtrl from '../lessons/lesson.controller';
+import { validateRequest } from '../../middlewares/validation';
+import { bulkCreateLessonsSchema } from '../lessons/lesson.schemas';
 
 // ownership guard (school or teacher must own the resource for mutating ops)
 // for list/create we derive owner from req.user in controller; here we ensure roles
@@ -25,6 +27,13 @@ r.post('/:id/duplicate', authenticate, requireCourseOwnerRole, courseCtrl.duplic
 
 // lesson routes with course dependency
 r.get('/:courseId/lessons', authenticate, lessonCtrl.listLessonsForCourse);
+r.post(
+  '/:courseId/lessons',
+  authenticate,
+  authorize(['teacher', 'school']),
+  validateRequest(bulkCreateLessonsSchema),
+  lessonCtrl.bulkCreateForCourse
+);
 r.post(
   '/:courseId/lessons/reorder',
   authenticate,

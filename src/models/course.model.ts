@@ -13,7 +13,7 @@ export interface CourseDoc extends Document {
   ageGroups: string[]; // ["6-8","9-12"] etc.
   startDate: Date;
   endDate?: Date | null;
-  introImage?: { attachmentId: string; url: string } | null;
+  introImageRef?: Types.ObjectId | null;
 
   // ownership
   ownerType: 'school' | 'teacher';
@@ -36,7 +36,7 @@ const CourseSchema = new Schema<CourseDoc>(
     title: { type: String, required: true, trim: true },
     description: { type: String, default: '' },
     language: { type: String, required: true, index: true },
-    lessonType: { type: String, enum: ['one-on-one', 'group'], required: true },
+    lessonType: { type: String, enum: ['1-on-1', 'group'], required: true },
     studentCapacity: { type: Number, min: 1, default: 1 },
     mode: { type: String, enum: ['online', 'in-person'], required: true },
     pricePerLesson: { type: Number, min: 0, index: true, required: true },
@@ -46,10 +46,7 @@ const CourseSchema = new Schema<CourseDoc>(
     startDate: { type: Date, index: true, required: true },
     endDate: { type: Date },
 
-    introImage: {
-      attachmentId: { type: String },
-      url: { type: String }
-    },
+    introImageRef: { type: Schema.Types.ObjectId, ref: 'Attachment', default: null },
 
     ownerType: { type: String, enum: ['school', 'teacher'], required: true, index: true },
     ownerId: { type: Schema.Types.ObjectId, required: true, index: true },

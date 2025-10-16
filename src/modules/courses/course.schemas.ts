@@ -13,12 +13,15 @@ export const courseCreateSchema = z.object({
   ageGroups: z.array(z.enum(AGE_GROUPS as unknown as [string, ...string[]])).min(1),
   startDate: z.coerce.date(),
   endDate: z.coerce.date().optional(),
-
-  introImageAttachmentId: z.string().optional(),
-  introImageUrl: z.string().url().optional(),
-
+  // introImageRef: z.string().optional(),
+  introImageRef: z
+    .union([z.string().length(24), z.literal('')])
+    .optional()
+    .transform(v => (v && v.length === 24 ? v : null)),
   status: z.enum(['draft', 'active', 'archived']).optional().default('draft')
 });
+
+export type CourseCreateDTO = z.infer<typeof courseCreateSchema>;
 
 export const courseUpdateSchema = courseCreateSchema.partial();
 

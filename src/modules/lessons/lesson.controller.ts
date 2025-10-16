@@ -4,6 +4,7 @@ import { lessonCreateSchema, lessonUpdateSchema, lessonReorderSchema } from './l
 import { LessonService } from './lesson.service';
 import { LessonDoc } from '../../models/lesson.model';
 import { Types } from 'mongoose';
+import { AuthenticatedRequest } from '../../middlewares/auth';
 
 export const createLesson = async (req: Request, res: Response) => {
   const parsed = lessonCreateSchema.safeParse(req.body);
@@ -12,7 +13,6 @@ export const createLesson = async (req: Request, res: Response) => {
   }
   try {
     const { courseId, ...rest } = parsed.data;
-    console.log('req.user', req.user);
 
     const payload: Partial<LessonDoc> = {
       ...rest,
@@ -101,4 +101,30 @@ export const listLessonsForCourse = async (req: Request, res: Response) => {
     limit
   });
   return res.json(createSuccessResponse(data));
+};
+
+export const bulkCreateForCourse = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const courseId = new Types.ObjectId(req.params.courseId);
+    const lessons = req.body.lessons || [];
+
+    const result = await LessonService.bulkCreateForCourse({
+      courseId,
+      lessons
+    });
+
+    return res.status(201).json(createSuccessResponse(result, 'Lessons created', 201));
+  } catch (err: any) {
+    // map known domain errors to proper status
+    const code = err?.code;
+    if (code === '409_CONFLICT_OVERLAP' || code === '409_CONFLICT_IMMUTABLE_FIELD') {
+      return res.status(409).json(createErrorResponse(err.message, err.code, 409));
+    }
+    if (code === '422_VALIDATION') {
+      return res.status(422).json(createErrorResponse(err.message, err.code, 422));
+    }
+    return res
+      .status(500)
+      .json(createErrorResponse('Failed to create lessons', 'Internal Server Error', 500));
+  }
 };

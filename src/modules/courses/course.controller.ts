@@ -10,42 +10,59 @@ export const createCourse = async (req: Request, res: Response) => {
     return res.status(422).json(createErrorResponse(parsed.error.message, 'Validation Error', 422));
 
   const role = req.user!.role === USER_ROLES.SCHOOL ? 'school' : 'teacher';
-  const owner = { role, id: req.user!.id };
+  const owner:
+    | {
+        role: 'school' | 'teacher';
+        id: string;
+      }
+    | undefined = { role, id: req.user!.id };
 
-  const introImage =
-    parsed.data.introImageAttachmentId && parsed.data.introImageUrl
-      ? { attachmentId: parsed.data.introImageAttachmentId, url: parsed.data.introImageUrl }
-      : undefined;
-
-  const course = await CourseService.create({ ...parsed.data, introImage }, owner);
+  const course = await CourseService.create(parsed.data, owner);
   return res.status(201).json(createSuccessResponse(course, 'Created', 201));
 };
 
 export const updateCourse = async (req: Request, res: Response) => {
-  const parsed = courseUpdateSchema.safeParse(req.body);
-  if (!parsed.success)
-    return res.status(422).json(createErrorResponse(parsed.error.message, 'Validation Error', 422));
+  try {
+    const parsed = courseUpdateSchema.safeParse(req.body);
+    if (!parsed.success)
+      return res
+        .status(422)
+        .json(createErrorResponse(parsed.error.message, 'Validation Error', 422));
 
-  const role = req.user!.role === USER_ROLES.SCHOOL ? 'school' : 'teacher';
-  const owner = { role, id: req.user!.id };
-
-  const introImage =
-    (parsed.data as any).introImageAttachmentId && (parsed.data as any).introImageUrl
-      ? {
-          attachmentId: (parsed.data as any).introImageAttachmentId,
-          url: (parsed.data as any).introImageUrl
+    const role = req.user!.role === USER_ROLES.SCHOOL ? 'school' : 'teacher';
+    const owner:
+      | {
+          role: 'school' | 'teacher';
+          id: string;
         }
-      : undefined;
+      | undefined = { role, id: req.user!.id };
 
-  const updated = await CourseService.update(req.params.id, { ...parsed.data, introImage }, owner);
-  if (!updated)
-    return res.status(404).json(createErrorResponse('Course not found', 'Not found', 404));
-  return res.json(createSuccessResponse(updated, 'Updated'));
+    // const introImageRef =
+    //   (parsed.data as any).introImageAttachmentId && (parsed.data as any).introImageUrl
+    //     ? {
+    //       attachmentId: (parsed.data as any).introImageAttachmentId,
+    //       url: (parsed.data as any).introImageUrl
+    //     }
+    //     : undefined;
+
+    const updated = await CourseService.update(req.params.id, parsed.data, owner);
+
+    if (!updated)
+      return res.status(404).json(createErrorResponse('Course not found', 'Not found', 404));
+    return res.json(createSuccessResponse(updated, 'Updated'));
+  } catch (error) {
+    console.log('error', error);
+  }
 };
 
 export const deleteCourse = async (req: Request, res: Response) => {
   const role = req.user!.role === USER_ROLES.SCHOOL ? 'school' : 'teacher';
-  const owner = { role, id: req.user!.id };
+  const owner:
+    | {
+        role: 'school' | 'teacher';
+        id: string;
+      }
+    | undefined = { role, id: req.user!.id };
   const removed = await CourseService.remove(req.params.id, owner);
   if (!removed)
     return res.status(404).json(createErrorResponse('Course not found', 'Not found', 404));
@@ -54,7 +71,12 @@ export const deleteCourse = async (req: Request, res: Response) => {
 
 export const duplicateCourse = async (req: Request, res: Response) => {
   const role = req.user!.role === USER_ROLES.SCHOOL ? 'school' : 'teacher';
-  const owner = { role, id: req.user!.id };
+  const owner:
+    | {
+        role: 'school' | 'teacher';
+        id: string;
+      }
+    | undefined = { role, id: req.user!.id };
   const copy = await CourseService.duplicate(req.params.id, owner);
   if (!copy) return res.status(404).json(createErrorResponse('Course not found', 'Not found', 404));
   return res.status(201).json(createSuccessResponse(copy, 'Duplicated', 201));
@@ -78,7 +100,12 @@ export const listCourses = async (req: Request, res: Response) => {
       : req.user!.role === USER_ROLES.TEACHER
         ? 'teacher'
         : undefined;
-  const owner = role ? { role, id: req.user!.id } : undefined;
+  const owner:
+    | {
+        role: 'school' | 'teacher';
+        id: string;
+      }
+    | undefined = role ? { role, id: req.user!.id } : undefined;
 
   const result = await CourseService.list({ ...parsed.data, owner });
   return res.json(createSuccessResponse(result));

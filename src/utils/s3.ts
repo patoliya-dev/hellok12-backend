@@ -31,7 +31,8 @@ export async function makePresignedPost({
       Key: key,
       Conditions: [
         ['content-length-range', 1, maxBytes],
-        ['starts-with', '$Content-Type', contentType.split('/')[0] + '/']
+        ['starts-with', '$Content-Type', contentType.split('/')[0] + '/'],
+        ['eq', '$x-amz-server-side-encryption', 'AES256']
       ],
       Fields: {
         'Content-Type': contentType,
@@ -39,11 +40,6 @@ export async function makePresignedPost({
       },
       Expires: expiresSeconds
     });
-
-    // ⚡ Inject session token if it exists (SDK sometimes omits it)
-    if ((creds as any)?.sessionToken) {
-      post.fields['x-amz-security-token'] = (creds as any).sessionToken;
-    }
 
     return post;
   } catch (err) {

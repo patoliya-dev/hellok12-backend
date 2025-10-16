@@ -421,11 +421,26 @@ export const authService = {
         throw new Error('Invalid verification token');
       }
 
-      const user = await User.findById(decoded.id).populate(
-        'children',
-        'name profile.age profile.gender'
-      );
+      const checkRole = await User.findById(decoded.id).select('role');
 
+      if (!checkRole) {
+        throw new Error('User not found');
+      }
+      let populateQuery: any = { path: `${checkRole.role}Profile` };
+      if (checkRole.role === 'parent') {
+        populateQuery = {
+          path: 'parentProfile',
+          populate: {
+            path: 'children',
+            populate: [
+              { path: 'studentProfile' },
+              { path: 'profileImage', match: { status: 'READY' }, select: 'url' }
+            ]
+          }
+        };
+      }
+
+      const user = await User.findById(decoded.id).populate(populateQuery);
       if (!user) {
         throw new Error('User not found');
       }

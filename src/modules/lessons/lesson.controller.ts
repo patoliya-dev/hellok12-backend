@@ -103,28 +103,37 @@ export const listLessonsForCourse = async (req: Request, res: Response) => {
   return res.json(createSuccessResponse(data));
 };
 
-export const bulkCreateForCourse = async (req: AuthenticatedRequest, res: Response) => {
+export const bulkCreateForCourse = async (req: Request, res: Response) => {
   try {
     const courseId = new Types.ObjectId(req.params.courseId);
     const lessons = req.body.lessons || [];
-
-    const result = await LessonService.bulkCreateForCourse({
-      courseId,
-      lessons
-    });
-
+    const result = await LessonService.bulkCreateForCourse({ courseId, lessons });
     return res.status(201).json(createSuccessResponse(result, 'Lessons created', 201));
   } catch (err: any) {
-    // map known domain errors to proper status
     const code = err?.code;
-    if (code === '409_CONFLICT_OVERLAP' || code === '409_CONFLICT_IMMUTABLE_FIELD') {
-      return res.status(409).json(createErrorResponse(err.message, err.code, 409));
-    }
-    if (code === '422_VALIDATION') {
-      return res.status(422).json(createErrorResponse(err.message, err.code, 422));
+    if (code === '409_CONFLICT_OVERLAP') {
+      return res.status(409).json(createErrorResponse(err.message, code, 409));
     }
     return res
       .status(500)
       .json(createErrorResponse('Failed to create lessons', 'Internal Server Error', 500));
+  }
+};
+
+export const bulkUpdateForCourse = async (req: Request, res: Response) => {
+  try {
+    const courseId = new Types.ObjectId(req.params.courseId);
+    const updates = req.body.updates || [];
+    const deletes = req.body.deletes || [];
+    const result = await LessonService.bulkUpdateForCourse({ courseId, updates, deletes });
+    return res.status(200).json(createSuccessResponse(result, 'Lessons updated', 200));
+  } catch (err: any) {
+    const code = err?.code;
+    if (code === '409_CONFLICT_OVERLAP') {
+      return res.status(409).json(createErrorResponse(err.message, code, 409));
+    }
+    return res
+      .status(500)
+      .json(createErrorResponse('Failed to update lessons', 'Internal Server Error', 500));
   }
 };

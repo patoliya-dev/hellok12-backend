@@ -1,7 +1,7 @@
 import { FilterQuery, Types } from 'mongoose';
 import { Course, CourseDoc } from '../../models/course.model';
 import { Lesson } from '../../models/lesson.model';
-import { CourseCreateDTO } from './course.schemas';
+import { CourseCreateDTO, CourseUpdateDTO } from './course.schemas';
 
 export const CourseService = {
   async create(data: CourseCreateDTO, owner: { role: 'school' | 'teacher'; id: string }) {
@@ -38,13 +38,18 @@ export const CourseService = {
     return doc.toObject();
   },
 
-  async update(id: string, data: any, owner?: { role: 'school' | 'teacher'; id: string }) {
+  async update(
+    id: string,
+    data: CourseUpdateDTO,
+    owner?: { role: 'school' | 'teacher'; id: string }
+  ) {
     // ownership check (if provided from route-level guard)
     const filter: FilterQuery<CourseDoc> = { _id: id };
     if (owner) {
       filter.ownerType = owner.role;
       filter.ownerId = new Types.ObjectId(owner.id);
     }
+
     const doc = await Course.findOneAndUpdate(
       filter,
       { $set: data },
@@ -89,7 +94,7 @@ export const CourseService = {
           ...l,
           _id: undefined,
           courseId: copy._id,
-          isTrial: false, // reset (can be toggled later)
+          isTrialAvailable: false, // reset (can be toggled later)
           createdAt: undefined,
           updatedAt: undefined
         }))
@@ -193,7 +198,7 @@ export const CourseService = {
 
   // called by lesson service to sync trial flag
   async recalcTrialFlag(courseId: string) {
-    const hasTrial = await Lesson.exists({ courseId, isTrial: true });
+    const hasTrial = await Lesson.exists({ courseId, isTrialAvailable: true });
     await Course.findByIdAndUpdate(courseId, { $set: { isTrialAvailable: !!hasTrial } });
   }
 };

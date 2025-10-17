@@ -47,9 +47,11 @@ export const updateCourse = async (req: Request, res: Response) => {
 
     const updated = await CourseService.update(req.params.id, parsed.data, owner);
 
-    if (!updated)
+    if (!updated) {
       return res.status(404).json(createErrorResponse('Course not found', 'Not found', 404));
-    return res.json(createSuccessResponse(updated, 'Updated'));
+    }
+
+    return res.status(200).json(createSuccessResponse(updated, 'Course updated successfully', 200));
   } catch (error) {
     console.log('error', error);
   }

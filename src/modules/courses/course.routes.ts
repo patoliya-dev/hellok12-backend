@@ -4,7 +4,7 @@ import { USER_ROLES } from '../../utils/constants';
 import * as courseCtrl from './course.controller';
 import * as lessonCtrl from '../lessons/lesson.controller';
 import { validateRequest } from '../../middlewares/validation';
-import { bulkCreateLessonsSchema } from '../lessons/lesson.schemas';
+import { bulkCreateLessonsSchema, bulkUpdateLessonsSchema } from '../lessons/lesson.schemas';
 
 // ownership guard (school or teacher must own the resource for mutating ops)
 // for list/create we derive owner from req.user in controller; here we ensure roles
@@ -33,6 +33,14 @@ r.post(
   authorize(['teacher', 'school']),
   validateRequest(bulkCreateLessonsSchema),
   lessonCtrl.bulkCreateForCourse
+);
+
+r.patch(
+  '/:courseId/lessons',
+  authenticate,
+  authorize(['teacher', 'school']),
+  validateRequest(bulkUpdateLessonsSchema),
+  lessonCtrl.bulkUpdateForCourse
 );
 r.post(
   '/:courseId/lessons/reorder',

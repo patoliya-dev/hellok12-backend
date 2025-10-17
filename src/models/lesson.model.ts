@@ -17,7 +17,7 @@ export interface LessonDoc extends Document {
   startAt: Date; // UTC datetime = schedule.date + schedule.time
   endAt: Date; // startAt + duration (minutes)
 
-  isTrial: boolean;
+  isTrialAvailable: boolean;
   trialCapacity?: number;
   order: number;
 
@@ -41,7 +41,7 @@ const LessonSchema = new Schema<LessonDoc>(
     startAt: { type: Date, required: true, index: true }, // derived
     endAt: { type: Date, required: true, index: true }, // derived
 
-    isTrial: { type: Boolean, default: false, index: true },
+    isTrialAvailable: { type: Boolean, default: false, index: true },
     trialCapacity: { type: Number, min: 0, default: 0 },
     order: { type: Number, default: 0, index: true }
   },
@@ -86,6 +86,6 @@ LessonSchema.pre('validate', function (next) {
 // helpful indexes for dashboard + calendar-like lists
 LessonSchema.index({ courseId: 1, order: 1 });
 LessonSchema.index({ courseId: 1, startAt: 1 });
-LessonSchema.index({ isTrial: 1, startAt: 1 });
+LessonSchema.index({ isTrialAvailable: 1, startAt: 1 });
 
 export const Lesson = model<LessonDoc>('Lesson', LessonSchema);

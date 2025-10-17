@@ -1,13 +1,13 @@
 import { Request, Response } from 'express';
 import crypto from 'crypto';
-import { Buffer } from 'node:buffer';
 import { s3, headObject, makePresignedPost } from '../../utils/s3';
 import { AttachmentModel } from '../../models/attachment.model';
 import { createErrorResponse, createSuccessResponse } from '../../utils/apiResponse';
 import { CopyObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import config from '../../config/config';
 
-const BUCKET = process.env.S3_BUCKET!;
-const BASE = (process.env.S3_PUBLIC_BASE || '').replace(/\/$/, '');
+const BUCKET = config.AWS_CONFIG.S3_ASSET_BUCKET!;
+const BASE = (config.AWS_CONFIG.S3_ASSETS_PUBLIC_BASE || '').replace(/\/$/, '');
 const MAX_BYTES_DEFAULT = 5 * 1024 * 1024; // 5MB default
 const ALLOWED_MIME = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp']); // tweak as needed
 

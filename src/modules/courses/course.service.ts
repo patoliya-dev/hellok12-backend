@@ -1,204 +1,89 @@
-import { FilterQuery, Types } from 'mongoose';
-import { Course, CourseDoc } from '../../models/course.model';
-import { Lesson } from '../../models/lesson.model';
-import { CourseCreateDTO, CourseUpdateDTO } from './course.schemas';
+import { CourseModel, CourseDoc } from '../../models/course.model';
+import { LessonModel } from '../../models/lesson.model';
 
-export const CourseService = {
-  async create(data: CourseCreateDTO, owner: { role: 'school' | 'teacher'; id: string }) {
-    const payload: Partial<CourseDoc> = {
-      title: data.title,
-      description: data.description ?? '',
-      language: data.language,
-      lessonType: data.lessonType,
-      studentCapacity: data.studentCapacity ?? 1,
-      mode: data.mode,
-      pricePerLesson: data.pricePerLesson,
-      currency: data.currency ?? 'USD',
-      ageGroups: data.ageGroups,
-      startDate: data.startDate,
-      endDate: data.endDate ?? null,
+export interface Pagination<T> {
+  page: number;
+  limit: number;
+  total: number;
+  items: T[];
+}
 
-      // cast if present
-      introImageRef: data.introImageRef ? new Types.ObjectId(data.introImageRef) : null,
-
-      ownerType: owner.role,
-      ownerId: new Types.ObjectId(owner.id),
-
-      status: data.status ?? 'draft',
-      isTrialAvailable: false,
-      enrolledCount: 0
-    };
-    // const payload: Partial<CourseDoc> = {
-    //   ...data,
-    //   ownerType: owner.role,
-    //   ownerId: new Types.ObjectId(owner.id),
-    //   isTrialAvailable: false
-    // };
-    const doc = await Course.create(payload);
-    return doc.toObject();
+export const CourseRepo = {
+  async createCourse(data: any): Promise<CourseDoc> {
+    const course = await CourseModel.create({ ...data });
+    return course.toObject({ versionKey: false }) as any;
   },
 
-  async update(
-    id: string,
-    data: CourseUpdateDTO,
-    owner?: { role: 'school' | 'teacher'; id: string }
-  ) {
-    // ownership check (if provided from route-level guard)
-    const filter: FilterQuery<CourseDoc> = { _id: id };
-    if (owner) {
-      filter.ownerType = owner.role;
-      filter.ownerId = new Types.ObjectId(owner.id);
-    }
+  async getCourseById(id: string) {
+    return CourseModel.findById(id).lean();
+  },
 
-    const doc = await Course.findOneAndUpdate(
-      filter,
-      { $set: data },
+  async listCourses(query: any): Promise<Pagination<CourseDoc & { status: string }>> {
+    const {
+      page = 1,
+      limit = 20,
+      language,
+      status,
+      priceMin,
+      priceMax,
+      startFrom,
+      endTo,
+      q
+    } = query;
+    const mongo: any = { archivedAt: null };
+    if (language) mongo.language = language;
+    if (typeof priceMin === 'number' || typeof priceMax === 'number') {
+      mongo.pricePerLesson = {};
+      if (typeof priceMin === 'number') mongo.pricePerLesson.$gte = priceMin;
+      if (typeof priceMax === 'number') mongo.pricePerLesson.$lte = priceMax;
+    }
+    if (startFrom) mongo.startDate = { ...(mongo.startDate || {}), $gte: new Date(startFrom) };
+    if (endTo) mongo.endDate = { ...(mongo.endDate || {}), $lte: new Date(endTo) };
+    if (q) mongo.$or = [{ title: new RegExp(q, 'i') }, { description: new RegExp(q, 'i') }];
+
+    const total = await CourseModel.countDocuments(mongo);
+    const items = await CourseModel.find(mongo)
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .lean();
+
+    // attach derived status
+    const now = Date.now();
+    const withStatus = items.map(c => {
+      const start = new Date(c.startDate).getTime();
+      const end = c.endDate ? new Date(c.endDate).getTime() : Infinity;
+      const derived =
+        c.published && start <= now && now <= end ? 'ACTIVE' : c.archivedAt ? 'ARCHIVED' : 'DRAFT';
+      return { ...c, status: derived };
+    });
+    // filter by status if requested
+    const filtered = status ? withStatus.filter(c => c.status === status) : withStatus;
+    return { page, limit, total: status ? filtered.length : total, items: filtered } as any;
+  },
+
+  async updateCourse(id: string, patch: Partial<CourseDoc>) {
+    return CourseModel.findByIdAndUpdate(
+      id,
+      { $set: patch },
       { new: true, runValidators: true }
     ).lean();
-    return doc;
   },
 
-  async remove(id: string, owner?: { role: 'school' | 'teacher'; id: string }) {
-    const filter: FilterQuery<CourseDoc> = { _id: id };
-    if (owner) {
-      filter.ownerType = owner.role;
-      filter.ownerId = new Types.ObjectId(owner.id);
-    }
-    await Lesson.deleteMany({ courseId: id }); // cascade lessons
-    return Course.findOneAndDelete(filter).lean();
+  async setCoursePublished(id: string, published: boolean) {
+    return CourseModel.findByIdAndUpdate(id, { $set: { published } }, { new: true }).lean();
   },
 
-  async duplicate(id: string, owner?: { role: 'school' | 'teacher'; id: string }) {
-    const filter: FilterQuery<CourseDoc> = { _id: id };
-    if (owner) {
-      filter.ownerType = owner.role;
-      filter.ownerId = new Types.ObjectId(owner.id);
-    }
-    const src = await Course.findOne(filter).lean();
-    if (!src) return null;
-
-    const copy = await Course.create({
-      ...src,
-      _id: undefined,
-      title: `${src.title} (Copy)`,
-      status: 'draft',
-      isTrialAvailable: false,
-      createdAt: undefined,
-      updatedAt: undefined
-    });
-
-    const lessons = await Lesson.find({ courseId: id }).lean();
-    if (lessons.length) {
-      await Lesson.insertMany(
-        lessons.map(l => ({
-          ...l,
-          _id: undefined,
-          courseId: copy._id,
-          isTrialAvailable: false, // reset (can be toggled later)
-          createdAt: undefined,
-          updatedAt: undefined
-        }))
-      );
-    }
-    return copy.toObject();
+  async setCourseArchived(id: string, archived: boolean) {
+    return CourseModel.findByIdAndUpdate(
+      id,
+      { $set: { archivedAt: archived ? new Date() : null } },
+      { new: true }
+    ).lean();
   },
 
-  async getById(id: string) {
-    const course = await Course.findById(id).populate('introImageRef', 'url').lean();
-    if (!course) return null;
-    // fetch lessons separately (no aggregation)
-    const lessons = await Lesson.find({ courseId: id }).sort({ order: 1, date: 1 }).lean();
-    return { ...course, lessons };
-  },
-
-  async list(query: {
-    search?: string;
-    language?: string;
-    status?: 'draft' | 'active' | 'archived';
-    trialAvailable?: boolean;
-    priceMin?: number;
-    priceMax?: number;
-    dateFrom?: Date;
-    dateTo?: Date;
-    sortBy: string;
-    page: number;
-    limit: number;
-    owner?: { role: 'school' | 'teacher'; id: string }; // optional dashboard scoping
-  }) {
-    const filter: FilterQuery<CourseDoc> = {};
-
-    if (query.owner) {
-      filter.ownerType = query.owner.role;
-      filter.ownerId = new Types.ObjectId(query.owner.id);
-    }
-
-    if (query.language) filter.language = query.language;
-    if (query.status) filter.status = query.status;
-    if (typeof query.trialAvailable === 'boolean') filter.isTrialAvailable = query.trialAvailable;
-
-    if (query.priceMin != null || query.priceMax != null) {
-      filter.pricePerLesson = {};
-      if (query.priceMin != null) filter.pricePerLesson.$gte = query.priceMin;
-      if (query.priceMax != null) filter.pricePerLesson.$lte = query.priceMax;
-    }
-
-    if (query.dateFrom || query.dateTo) {
-      // simple overlap: start within range OR (no end → >= from)
-      if (query.dateFrom && query.dateTo) {
-        filter.startDate = { $gte: query.dateFrom, $lte: query.dateTo };
-      } else if (query.dateFrom) {
-        filter.startDate = { $gte: query.dateFrom };
-      } else if (query.dateTo) {
-        filter.startDate = { $lte: query.dateTo };
-      }
-    }
-
-    if (query.search) {
-      filter.$or = [
-        { title: { $regex: query.search, $options: 'i' } },
-        { description: { $regex: query.search, $options: 'i' } }
-      ];
-    }
-
-    // sorts
-    const sortMap: Record<string, any> = {
-      newest: { createdAt: -1, _id: 1 },
-      titleAsc: { title: 1, _id: 1 },
-      titleDesc: { title: -1, _id: 1 },
-      languageAsc: { language: 1, _id: 1 },
-      languageDesc: { language: -1, _id: 1 },
-      studentsAsc: { enrolledCount: 1, _id: 1 },
-      studentsDesc: { enrolledCount: -1, _id: 1 },
-      priceAsc: { pricePerLesson: 1, _id: 1 },
-      priceDesc: { pricePerLesson: -1, _id: 1 },
-      statusAsc: { status: 1, _id: 1 },
-      statusDesc: { status: -1, _id: 1 },
-      startDateAsc: { startDate: 1, _id: 1 },
-      startDateDesc: { startDate: -1, _id: 1 }
-    };
-    const sort = sortMap[query.sortBy] || sortMap.newest;
-
-    const skip = (query.page - 1) * query.limit;
-
-    const [items, total] = await Promise.all([
-      Course.find(filter).sort(sort).skip(skip).limit(query.limit).lean(),
-      Course.countDocuments(filter)
-    ]);
-
-    return {
-      items,
-      pagination: {
-        page: query.page,
-        limit: query.limit,
-        total,
-        pages: Math.ceil(total / query.limit)
-      }
-    };
-  },
-
-  // called by lesson service to sync trial flag
-  async recalcTrialFlag(courseId: string) {
-    const hasTrial = await Lesson.exists({ courseId, isTrialAvailable: true });
-    await Course.findByIdAndUpdate(courseId, { $set: { isTrialAvailable: !!hasTrial } });
+  async anyLessonHasTrial(courseId: string): Promise<boolean> {
+    const exists = await LessonModel.exists({ courseId, trialAvailable: true, archivedAt: null });
+    return !!exists;
   }
 };

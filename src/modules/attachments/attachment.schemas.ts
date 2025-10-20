@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import config from '../../config/config';
 export const presignSchema = z.object({
   filename: z.string().min(1),
   mime: z.enum(['image/jpeg', 'image/png', 'image/webp']),
@@ -7,7 +6,7 @@ export const presignSchema = z.object({
     .number()
     .int()
     .min(1)
-    .max(Number(config.AWS_CONFIG.MAX_UPLOAD_MB || 5) * 1024 * 1024),
+    .max(Number(process.env.S3_MAX_UPLOAD_MB || 5) * 1024 * 1024),
   entityType: z.string().optional(),
   entityId: z.string().optional()
 });
@@ -15,11 +14,4 @@ export const completeSchema = z.object({
   key: z.string().min(1),
   entityType: z.string().optional(),
   entityId: z.string().optional()
-});
-
-export const claimSchema = z.object({
-  entityType: z.string().optional(),
-  entityId: z.string().optional(),
-  moveToEntityPrefix: z.boolean().optional(),
-  scope: z.string().optional()
 });

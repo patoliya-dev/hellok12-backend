@@ -3,7 +3,7 @@ import { PasswordResetToken } from '../../models/passwordResetToken.model';
 import bcrypt from 'bcryptjs';
 import { Types } from 'mongoose';
 import { randomInt } from 'crypto';
-import { emailService } from '../../utils/email.service';
+import { emailService } from '../../services/email.service';
 import { generateToken, generateRefreshToken, verifyRefreshToken } from '../../utils/jwt.util';
 import Logger from '../../utils/winstonLogger.utils';
 import {

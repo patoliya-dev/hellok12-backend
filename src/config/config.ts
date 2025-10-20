@@ -24,11 +24,6 @@ interface Config {
   emailUser: string;
   emailPass: string;
   emailFrom: string;
-  AWS_CONFIG: {
-    S3_ASSET_BUCKET: string;
-    S3_ASSETS_PUBLIC_BASE: string;
-    MAX_UPLOAD_MB: number;
-  };
 }
 
 // Type-safe config object
@@ -47,12 +42,7 @@ const config: Config = {
   emailPort: 465,
   emailUser: process.env.EMAIL_USER || '',
   emailPass: process.env.EMAIL_PASS || '',
-  emailFrom: `Hello12K <${process.env.EMAIL_USER}>`,
-  AWS_CONFIG: {
-    S3_ASSET_BUCKET: process.env.S3_ASSET_BUCKET || 'hellok12-assets-dev',
-    S3_ASSETS_PUBLIC_BASE: `https://${process.env.S3_ASSET_BUCKET || 'hellok12-assets-dev'}.s3.us-east-1.amazonaws.com`,
-    MAX_UPLOAD_MB: 5
-  }
+  emailFrom: `Hello12K <${process.env.EMAIL_USER}>`
 };
 
 export default config;

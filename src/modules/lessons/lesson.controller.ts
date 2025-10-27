@@ -1,121 +1,139 @@
-// src/modules/lessons/lesson.controller.ts
 import { Request, Response } from 'express';
-import { LessonRepo } from './lesson.service';
-import { CourseRepo } from '../courses/course.service';
-import { createSuccessResponse, createErrorResponse } from '../../utils/apiResponse';
-import { canManageCourse } from '../../middlewares/rbac';
+import { createErrorResponse, createSuccessResponse } from '../../utils/apiResponse';
+import { lessonCreateSchema, lessonUpdateSchema, lessonReorderSchema } from './lesson.schemas';
+import { LessonService } from './lesson.service';
+import { LessonDoc } from '../../models/lesson.model';
+import { Types } from 'mongoose';
+import { AuthenticatedRequest } from '../../middlewares/auth';
 
 export const createLesson = async (req: Request, res: Response) => {
-  const { courseId } = req.params;
-  const course = await CourseRepo.getCourseById(courseId);
-  if (!course)
-    return res.status(404).json(createErrorResponse('COURSE_NOT_FOUND', 'Not found', 404));
-  if (!canManageCourse(req.user!, course as any)) {
-    return res.status(403).json(createErrorResponse('FORBIDDEN', 'Forbidden', 403));
+  const parsed = lessonCreateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(422).json(createErrorResponse(parsed.error.message, 'Validation Error', 422));
   }
+  try {
+    const { courseId, ...rest } = parsed.data;
 
-  // session time validation: future + within course range
-  const start = new Date((course as any).startDate).getTime();
-  const end = (course as any).endDate ? new Date((course as any).endDate).getTime() : Infinity;
-  const now = Date.now();
-  for (const s of req.body.sessions) {
-    const t = new Date(s.startTime).getTime();
-    if (!(start <= t && t <= end))
-      return res
-        .status(422)
-        .json(createErrorResponse('SESSION_OUT_OF_COURSE_RANGE', 'Validation', 422));
-    if (t <= now)
-      return res.status(422).json(createErrorResponse('SESSION_MUST_BE_FUTURE', 'Validation', 422));
+    const payload: Partial<LessonDoc> = {
+      ...rest,
+      teacherId: new Types.ObjectId(req.user!.id),
+      courseId: new Types.ObjectId(courseId)
+    };
+
+    const created = await LessonService.create(payload);
+    return res.status(201).json(createSuccessResponse(created, 'Created', 201));
+  } catch (e: any) {
+    return res
+      .status(500)
+      .json(createErrorResponse('Create lesson failed', 'Internal Server Error', 500));
   }
-
-  const created = await LessonRepo.createLesson(String((course as any)._id), req.body);
-  return res.status(201).json(createSuccessResponse(created, 'Created', 201));
-};
-
-export const getLesson = async (req: Request, res: Response) => {
-  const l = await LessonRepo.getLessonById(req.params.lessonId);
-  if (!l) return res.status(404).json({ error: 'NOT_FOUND' });
-  return res.json(l);
-};
-
-export const listLessons = async (req: Request, res: Response) => {
-  const { courseId } = req.params;
-  const course = await CourseRepo.getCourseById(courseId);
-  if (!course) return res.status(404).json({ error: 'COURSE_NOT_FOUND' });
-  const result = await LessonRepo.listLessons(String((course as any)._id), req.query);
-  return res.json(result);
 };
 
 export const updateLesson = async (req: Request, res: Response) => {
-  const user = req.user!;
-  const lesson = await LessonRepo.getLessonById(req.params.lessonId);
-  if (!lesson) return res.status(404).json({ error: 'NOT_FOUND' });
-  const course = await CourseRepo.getCourseById(String((lesson as any).courseId));
-  if (!course) return res.status(404).json({ error: 'COURSE_NOT_FOUND' });
-  if (!canManageCourse(user, course as any)) return res.status(403).json({ error: 'FORBIDDEN' });
+  const parsed = lessonUpdateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(422).json(createErrorResponse(parsed.error.message, 'Validation Error', 422));
+  }
+  try {
+    const { courseId, teacherId, ...rest } = parsed.data;
+    const payload: Partial<LessonDoc> = {
+      ...rest,
+      teacherId: new Types.ObjectId(teacherId || req.user!.id),
+      courseId: new Types.ObjectId(courseId)
+    };
 
-  if (req.body.sessions) {
-    const start = new Date((course as any).startDate).getTime();
-    const end = (course as any).endDate ? new Date((course as any).endDate).getTime() : Infinity;
-    const now = Date.now();
-    for (const s of req.body.sessions) {
-      const t = new Date(s.startTime).getTime();
-      if (!(start <= t && t <= end))
-        return res.status(422).json({ error: 'SESSION_OUT_OF_COURSE_RANGE' });
-      if (t <= now) return res.status(422).json({ error: 'SESSION_MUST_BE_FUTURE' });
+    const updated = await LessonService.update(req.params.id, payload);
+    if (!updated)
+      return res.status(404).json(createErrorResponse('Lesson not found', 'Not found', 404));
+    return res.json(createSuccessResponse(updated, 'Updated'));
+  } catch (e: any) {
+    if (e?.message === 'TRIAL_EXISTS') {
+      return res
+        .status(409)
+        .json(createErrorResponse('Another trial lesson already exists', 'Conflict', 409));
     }
+    return res
+      .status(500)
+      .json(createErrorResponse('Update lesson failed', 'Internal Server Error', 500));
+  }
+};
+
+export const deleteLesson = async (req: Request, res: Response) => {
+  const removed = await LessonService.remove(req.params.id);
+  if (!removed)
+    return res.status(404).json(createErrorResponse('Lesson not found', 'Not found', 404));
+  return res.json(createSuccessResponse(removed, 'Deleted'));
+};
+
+export const duplicateLesson = async (req: Request, res: Response) => {
+  const copy = await LessonService.duplicate(req.params.id);
+  if (!copy) return res.status(404).json(createErrorResponse('Lesson not found', 'Not found', 404));
+  return res.status(201).json(createSuccessResponse(copy, 'Duplicated', 201));
+};
+
+export const reorderLessons = async (req: Request, res: Response) => {
+  const parsed = lessonReorderSchema.safeParse(req.body);
+  if (!parsed.success)
+    return res.status(422).json(createErrorResponse(parsed.error.message, 'Validation Error', 422));
+  await LessonService.reorder(req.params.courseId, parsed.data.items);
+  return res.json(createSuccessResponse(true, 'Reordered'));
+};
+
+export const listLessonsForCourse = async (req: Request, res: Response) => {
+  const courseId = String(req.params.courseId);
+
+  if (!Types.ObjectId.isValid(courseId)) {
+    return res.status(400).json(createErrorResponse('Invalid courseId', 'Bad Request', 400));
   }
 
-  const patch = { ...req.body, updatedAt: new Date() };
-  const updated = await LessonRepo.updateLesson(String((lesson as any)._id), patch);
-  if (!updated) return res.status(500).json({ error: 'UPDATE_FAILED' });
-  return res.json(updated);
+  const page = Math.max(1, Number(req.query.page ?? 1) || 1);
+  const limit = Math.max(1, Math.min(100, Number(req.query.limit ?? 20) || 20));
+
+  // Optional date filters (accept ISO strings)
+  const from = req.query.from ? new Date(String(req.query.from)) : undefined;
+  const to = req.query.to ? new Date(String(req.query.to)) : undefined;
+  // const page = Number(req.query.page || 1);
+  // const limit = Number(req.query.limit || 20);
+  const data = await LessonService.listByCourse(req.params.courseId, {
+    from,
+    to,
+    page,
+    limit
+  });
+  return res.json(createSuccessResponse(data));
 };
 
-export const publishLesson = async (req: Request, res: Response) => {
-  const user = req.user!;
-  const l = await LessonRepo.getLessonById(req.params.lessonId);
-  if (!l) return res.status(404).json({ error: 'NOT_FOUND' });
-  const course = await CourseRepo.getCourseById(String((l as any).courseId));
-  if (!course) return res.status(404).json({ error: 'COURSE_NOT_FOUND' });
-  if (!canManageCourse(user, course as any)) return res.status(403).json({ error: 'FORBIDDEN' });
-  const updated = await LessonRepo.setLessonPublished(String((l as any)._id), true);
-  if (!updated) return res.status(500).json({ error: 'UPDATE_FAILED' });
-  return res.json(updated);
+export const bulkCreateForCourse = async (req: Request, res: Response) => {
+  try {
+    const courseId = new Types.ObjectId(req.params.courseId);
+    const lessons = req.body.lessons || [];
+    const result = await LessonService.bulkCreateForCourse({ courseId, lessons });
+    return res.status(201).json(createSuccessResponse(result, 'Lessons created', 201));
+  } catch (err: any) {
+    const code = err?.code;
+    if (code === '409_CONFLICT_OVERLAP') {
+      return res.status(409).json(createErrorResponse(err.message, code, 409));
+    }
+    return res
+      .status(500)
+      .json(createErrorResponse('Failed to create lessons', 'Internal Server Error', 500));
+  }
 };
 
-export const unpublishLesson = async (req: Request, res: Response) => {
-  const user = req.user!;
-  const l = await LessonRepo.getLessonById(req.params.lessonId);
-  if (!l) return res.status(404).json({ error: 'NOT_FOUND' });
-  const course = await CourseRepo.getCourseById(String((l as any).courseId));
-  if (!course) return res.status(404).json({ error: 'COURSE_NOT_FOUND' });
-  if (!canManageCourse(user, course as any)) return res.status(403).json({ error: 'FORBIDDEN' });
-  const updated = await LessonRepo.setLessonPublished(String((l as any)._id), false);
-  if (!updated) return res.status(500).json({ error: 'UPDATE_FAILED' });
-  return res.json(updated);
-};
-
-export const archiveLesson = async (req: Request, res: Response) => {
-  const user = req.user!;
-  const l = await LessonRepo.getLessonById(req.params.lessonId);
-  if (!l) return res.status(404).json({ error: 'NOT_FOUND' });
-  const course = await CourseRepo.getCourseById(String((l as any).courseId));
-  if (!course) return res.status(404).json({ error: 'COURSE_NOT_FOUND' });
-  if (!canManageCourse(user, course as any)) return res.status(403).json({ error: 'FORBIDDEN' });
-  const updated = await LessonRepo.setLessonArchived(String((l as any)._id), true);
-  if (!updated) return res.status(500).json({ error: 'UPDATE_FAILED' });
-  return res.json(updated);
-};
-
-export const restoreLesson = async (req: Request, res: Response) => {
-  const user = req.user!;
-  const l = await LessonRepo.getLessonById(req.params.lessonId);
-  if (!l) return res.status(404).json({ error: 'NOT_FOUND' });
-  const course = await CourseRepo.getCourseById(String((l as any).courseId));
-  if (!course) return res.status(404).json({ error: 'COURSE_NOT_FOUND' });
-  if (!canManageCourse(user, course as any)) return res.status(403).json({ error: 'FORBIDDEN' });
-  const updated = await LessonRepo.setLessonArchived(String((l as any)._id), false);
-  if (!updated) return res.status(500).json({ error: 'UPDATE_FAILED' });
-  return res.json(updated);
+export const bulkUpdateForCourse = async (req: Request, res: Response) => {
+  try {
+    const courseId = new Types.ObjectId(req.params.courseId);
+    const updates = req.body.updates || [];
+    const deletes = req.body.deletes || [];
+    const result = await LessonService.bulkUpdateForCourse({ courseId, updates, deletes });
+    return res.status(200).json(createSuccessResponse(result, 'Lessons updated', 200));
+  } catch (err: any) {
+    const code = err?.code;
+    if (code === '409_CONFLICT_OVERLAP') {
+      return res.status(409).json(createErrorResponse(err.message, code, 409));
+    }
+    return res
+      .status(500)
+      .json(createErrorResponse('Failed to update lessons', 'Internal Server Error', 500));
+  }
 };

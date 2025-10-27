@@ -23,3 +23,8 @@ export const claimSchema = z.object({
   moveToEntityPrefix: z.boolean().optional(),
   scope: z.string().optional()
 });
+
+export const updateSchema = z.object({
+  attachmentId: z.string().min(1),
+  key: z.string().min(1).optional()
+});

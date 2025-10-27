@@ -38,7 +38,11 @@ const TeacherProfileSchema = new Schema(
     teachingMode: { type: String, enum: ['ONLINE', 'IN_PERSON'], default: 'ONLINE' },
     travelFee: { type: String, default: '' },
     maxStudentsPerGroup: { type: String, default: '' },
-    specialNotes: { type: String, default: '' }
+    specialNotes: { type: String, default: '' },
+
+    dateOfBirth: { type: Date },
+    yearsOfExperience: { type: Number, default: 0 },
+    travelRadius: { type: Number, default: 0 }
   },
   { timestamps: true }
 );

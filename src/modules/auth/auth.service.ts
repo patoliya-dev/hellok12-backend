@@ -699,6 +699,15 @@ export const authService = {
             ]
           }
         };
+      } else if (role === 'teacher') {
+        populateQuery = {
+          path: 'teacherProfile',
+          populate: {
+            path: 'certificates',
+            model: 'Attachment',
+            select: 'url key name size'
+          }
+        };
       }
 
       const user: any = await User.findById(userId)

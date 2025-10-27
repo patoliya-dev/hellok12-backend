@@ -5,6 +5,7 @@ import { AttachmentModel } from '../../models/attachment.model';
 import { createErrorResponse, createSuccessResponse } from '../../utils/apiResponse';
 import { CopyObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import config from '../../config/config';
+import Logger from '../../utils/winstonLogger.utils';
 
 const BUCKET = config.AWS_CONFIG.S3_ASSET_BUCKET!;
 const BASE = (config.AWS_CONFIG.S3_ASSETS_PUBLIC_BASE || '').replace(/\/$/, '');
@@ -31,6 +32,9 @@ function buildUploadPrefix({
   if (entityType === 'Course' && entityId) {
     const s = scope || 'intro';
     return `courses/${entityId}/${s}`;
+  } else if (entityType === 'User' && entityId && scope) {
+    const s = scope;
+    return `users/${entityId}/${s}`;
   }
   // Fallback (staging): uploads/<userId>/staged
   return `uploads/${userId}/staged`;
@@ -44,7 +48,6 @@ function buildUploadPrefix({
 export const presign = async (req: Request, res: Response) => {
   try {
     const { filename, mime, size, entityType, entityId, scope } = req.body;
-
     if (!filename || !mime || !size) {
       return res
         .status(400)
@@ -63,7 +66,7 @@ export const presign = async (req: Request, res: Response) => {
     }
 
     const ext = filename.includes('.') ? filename.split('.').pop() : 'bin';
-    const uuid = crypto.randomUUID();
+    const timestamp = Date.now();
 
     const prefix = buildUploadPrefix({
       userId: req.user!.id,
@@ -72,7 +75,7 @@ export const presign = async (req: Request, res: Response) => {
       scope: scope ?? null
     });
 
-    const key = `${prefix}/${uuid}.${ext}`;
+    const key = `${prefix}/${timestamp}_${filename}`;
 
     const post = await makePresignedPost({
       bucket: BUCKET,
@@ -83,7 +86,6 @@ export const presign = async (req: Request, res: Response) => {
 
     return res.json(createSuccessResponse({ upload: post, key }, 'Presigned', 200));
   } catch (err: any) {
-    console.error('presign error:', err);
     return res
       .status(500)
       .json(createErrorResponse('Failed to presign upload', 'Internal Server Error', 500));
@@ -128,7 +130,6 @@ export const complete = async (req: Request, res: Response) => {
 
     return res.status(201).json(createSuccessResponse(att, 'Attachment Created', 201));
   } catch (err: any) {
-    console.error('complete error:', err);
     return res
       .status(500)
       .json(createErrorResponse('Attachment finalize failed', 'Internal Server Error', 500));
@@ -200,10 +201,81 @@ export const claim = async (req: Request, res: Response) => {
 
     return res.json(createSuccessResponse(att, 'Attachment Claimed', 200));
   } catch (err: any) {
-    console.error('claim error:', err);
     return res
       .status(500)
       .json(createErrorResponse('Attachment claim failed', 'Internal Server Error', 500));
+  }
+};
+
+/**
+ * Marks an uploaded S3 file as completed and update an Attachment record
+ * This endpoint should be called AFTER the frontend successfully uploads to S3 using a presigned URL if attachmentId exists.
+ * @returns {status: 200, data: Attachment}
+ */
+export const updateAttachment = async (req: Request, res: Response) => {
+  const { attachmentId, key } = req.body;
+
+  try {
+    if (!attachmentId) {
+      return res
+        .status(400)
+        .json({ error: 'MISSING_ATTACHMENT_ID', message: 'Attachment ID is required.' });
+    }
+
+    const attachment = await AttachmentModel.findById(attachmentId);
+    if (!attachment) {
+      return res
+        .status(404)
+        .json({ error: 'ATTACHMENT_NOT_FOUND', message: 'No attachment found with the given ID.' });
+    }
+    const oldKey = attachment.key;
+
+    if (key && key !== attachment.key) {
+      let head;
+      try {
+        head = await headObject(BUCKET, key);
+      } catch (err: any) {
+        Logger.warn(`S3 headObject failed for key=${key}`, err);
+        return res
+          .status(404)
+          .json({ error: 'OBJECT_NOT_FOUND', message: 'File not found in S3 bucket.' });
+      }
+
+      // Update key and related fields if file changed
+      attachment.key = key;
+      attachment.url = `${BASE}/${key}`;
+      attachment.size = head.ContentLength || 0;
+      attachment.mime = head.ContentType || '';
+    }
+
+    const updatedAttachment = await attachment.save();
+
+    Logger.info(`Attachment updated: ${attachmentId} by user=${req.user?.id}`);
+
+    if (oldKey !== attachment.key) {
+      try {
+        await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: oldKey }));
+        Logger.info(`Old S3 file deleted: ${oldKey}`);
+      } catch (error) {
+        Logger.warn(`Failed to delete old S3 file: ${oldKey}`, error);
+        return res
+          .status(500)
+          .json({ error: 'INTERNAL_SERVER_ERROR', message: 'Failed to delete old S3 file.' });
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Attachment updated successfully.',
+      data: updatedAttachment
+    });
+  } catch (error: any) {
+    Logger.error('Attachment update failed:', error);
+    return res.status(500).json({
+      error: 'INTERNAL_SERVER_ERROR',
+      message: 'Something went wrong while updating the attachment.',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 };
 
@@ -222,7 +294,6 @@ export const softDelete = async (req: Request, res: Response) => {
     }
     return res.json(createSuccessResponse(a, 'Deleted'));
   } catch (err: any) {
-    console.error('softDelete error:', err);
     return res
       .status(500)
       .json(createErrorResponse('Internal Server Error', 'Internal Server Error', 500));

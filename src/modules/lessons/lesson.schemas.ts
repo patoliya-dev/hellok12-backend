@@ -17,6 +17,7 @@ export const lessonCreateSchema = z.object({
     time: z.string().regex(/^(0?[1-9]|1[0-2]):[0-5][0-9]\s?(AM|PM)$/i),
     duration: z.number().int().min(1).max(60).default(60) // 1hr max as per your rule
   }),
+  status: z.enum(['draft', 'active', 'archived']).default('draft'),
   isTrialAvailable: z.boolean().default(false),
   trialCapacity: z.number().int().min(1).max(1000).optional(),
   order: z.number().int().min(0).default(0)
@@ -43,6 +44,7 @@ export const lessonCreateItemSchema = z.object({
   schedule: lessonScheduleSchema,
   isTrialAvailable: z.boolean().optional().default(false),
   trialCapacity: z.coerce.number().int().min(0).optional(),
+  status: z.enum(['draft', 'active', 'archived']).optional().default('draft'),
   order: z.coerce.number().int().min(0).optional(),
   // (Optional) vocab or tags if UI uses them
   vocabulary: z.array(z.string()).optional()
@@ -56,7 +58,8 @@ export const lessonUpdateItemSchema = z.object({
   isTrialAvailable: z.boolean().optional(),
   trialCapacity: z.coerce.number().int().min(0).optional(),
   order: z.coerce.number().int().min(0).optional(),
-  vocabulary: z.array(z.string()).optional()
+  vocabulary: z.array(z.string()).optional(),
+  status: z.enum(['draft', 'active', 'archived']).optional()
 });
 
 export const bulkCreateLessonsSchema = z.object({
@@ -81,7 +84,8 @@ export const lessonItemSchema = z.object({
   schedule: lessonScheduleSchema,
   isTrialAvailable: z.boolean().optional().default(false),
   trialCapacity: z.coerce.number().int().min(0).optional(),
-  order: z.coerce.number().int().min(0).optional()
+  order: z.coerce.number().int().min(0).optional(),
+  status: z.enum(['draft', 'active', 'archived']).optional().default('draft')
 });
 
 export type BulkUpdateLessonsInput = z.infer<typeof bulkUpdateLessonsSchema>;

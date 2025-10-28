@@ -106,6 +106,12 @@ export const CourseService = {
   async getById(id: string) {
     const course = await Course.findById(id).populate('introImageRef', 'url').lean();
     if (!course) return null;
+    return course;
+  },
+
+  async getByIdWithLessons(id: string) {
+    const course = await Course.findById(id).populate('introImageRef', 'url').lean();
+    if (!course) return null;
     // fetch lessons separately (no aggregation)
     const lessons = await Lesson.find({ courseId: id }).sort({ order: 1, date: 1 }).lean();
     return { ...course, lessons };
@@ -115,7 +121,7 @@ export const CourseService = {
     search?: string;
     language?: string;
     status?: 'draft' | 'active' | 'archived';
-    trialAvailable?: boolean;
+    isTrialAvailable?: boolean;
     priceMin?: number;
     priceMax?: number;
     dateFrom?: Date;
@@ -134,7 +140,8 @@ export const CourseService = {
 
     if (query.language) filter.language = query.language;
     if (query.status) filter.status = query.status;
-    if (typeof query.trialAvailable === 'boolean') filter.isTrialAvailable = query.trialAvailable;
+    if (typeof query.isTrialAvailable === 'boolean')
+      filter.isisTrialAvailable = query.isTrialAvailable;
 
     if (query.priceMin != null || query.priceMax != null) {
       filter.pricePerLesson = {};

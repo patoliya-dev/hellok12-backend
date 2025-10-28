@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { createErrorResponse, createSuccessResponse } from '../../utils/apiResponse';
 import { lessonCreateSchema, lessonUpdateSchema, lessonReorderSchema } from './lesson.schemas';
 import { LessonService } from './lesson.service';
+import { CourseService } from '../courses/course.service';
 import { LessonDoc } from '../../models/lesson.model';
 import { Types } from 'mongoose';
 import { AuthenticatedRequest } from '../../middlewares/auth';
@@ -86,6 +87,11 @@ export const listLessonsForCourse = async (req: Request, res: Response) => {
     return res.status(400).json(createErrorResponse('Invalid courseId', 'Bad Request', 400));
   }
 
+  const course = await CourseService.getById(courseId);
+  if (!course) {
+    return res.status(404).json(createErrorResponse('Course not found', 'Not Found', 404));
+  }
+
   const page = Math.max(1, Number(req.query.page ?? 1) || 1);
   const limit = Math.max(1, Math.min(100, Number(req.query.limit ?? 20) || 20));
 
@@ -100,23 +106,37 @@ export const listLessonsForCourse = async (req: Request, res: Response) => {
     page,
     limit
   });
-  return res.json(createSuccessResponse(data));
+  return res.json(createSuccessResponse({ ...data, course }));
 };
 
 export const bulkCreateForCourse = async (req: Request, res: Response) => {
   try {
     const courseId = new Types.ObjectId(req.params.courseId);
     const lessons = req.body.lessons || [];
+
     const result = await LessonService.bulkCreateForCourse({ courseId, lessons });
-    return res.status(201).json(createSuccessResponse(result, 'Lessons created', 201));
+
+    return res.status(201).json(createSuccessResponse(result, 'Lessons created successfully', 201));
   } catch (err: any) {
-    const code = err?.code;
-    if (code === '409_CONFLICT_OVERLAP') {
-      return res.status(409).json(createErrorResponse(err.message, code, 409));
+    switch (err.code) {
+      case '404_NOT_FOUND':
+        return res.status(404).json(createErrorResponse(err.message, '404_NOT_FOUND', 404));
+
+      case '409_CONFLICT_OVERLAP':
+        return res.status(409).json(createErrorResponse(err.message, '409_CONFLICT_OVERLAP', 409));
+
+      case '422_VALIDATION':
+        return res
+          .status(422)
+          .json(
+            createErrorResponse(JSON.stringify({ fields: err.fields || [] }), '422_VALIDATION', 422)
+          );
+
+      default:
+        return res
+          .status(500)
+          .json(createErrorResponse('Failed to create lessons', 'Internal Server Error', 500));
     }
-    return res
-      .status(500)
-      .json(createErrorResponse('Failed to create lessons', 'Internal Server Error', 500));
   }
 };
 

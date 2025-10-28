@@ -13,6 +13,9 @@ export interface LessonDoc extends Document {
     duration: number; // minutes
   };
 
+  // status flags
+  status: 'draft' | 'active' | 'archived';
+
   // stored for fast list/filter/sort (derived from schedule)
   startAt: Date; // UTC datetime = schedule.date + schedule.time
   endAt: Date; // startAt + duration (minutes)
@@ -37,6 +40,8 @@ const LessonSchema = new Schema<LessonDoc>(
       time: { type: String, required: true }, // "HH:MM AM/PM"
       duration: { type: Number, required: true, min: 1 }
     },
+
+    status: { type: String, enum: ['draft', 'active', 'archived'], default: 'draft', index: true },
 
     startAt: { type: Date, required: true, index: true }, // derived
     endAt: { type: Date, required: true, index: true }, // derived

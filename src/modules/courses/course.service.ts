@@ -140,8 +140,9 @@ export const CourseService = {
 
     if (query.language) filter.language = query.language;
     if (query.status) filter.status = query.status;
-    if (typeof query.isTrialAvailable === 'boolean')
-      filter.isisTrialAvailable = query.isTrialAvailable;
+    if (typeof query.isTrialAvailable === 'boolean') {
+      filter.isTrialAvailable = query.isTrialAvailable;
+    }
 
     if (query.priceMin != null || query.priceMax != null) {
       filter.pricePerLesson = {};

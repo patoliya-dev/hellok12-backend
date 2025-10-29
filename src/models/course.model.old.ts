@@ -9,7 +9,7 @@ export interface ICourse extends Document {
   introImage?: string;
   options?: string[];
   studentCapacity?: number; // Only for group lessons
-  pricePerLesson: number;
+  price: number;
   ageRange?: { min: number; max: number };
   startDate: Date;
   endDate: Date;
@@ -25,7 +25,7 @@ const CourseSchema = new Schema<ICourse>(
     introImage: { type: String },
     options: [{ type: String }],
     studentCapacity: { type: Number },
-    pricePerLesson: { type: Number, required: true },
+    price: { type: Number, required: true },
     ageRange: {
       min: { type: Number },
       max: { type: Number }

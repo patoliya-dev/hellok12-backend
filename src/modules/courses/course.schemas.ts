@@ -8,7 +8,7 @@ export const courseCreateSchema = z.object({
   lessonType: z.enum([LESSON_TYPES.ONE_ON_ONE, LESSON_TYPES.GROUP]),
   studentCapacity: z.coerce.number().int().min(1),
   mode: z.enum([COURSE_MODE.ONLINE, COURSE_MODE.IN_PERSON]),
-  pricePerLesson: z.coerce.number().min(0),
+  price: z.coerce.number().min(0),
   currency: z.string().default('USD'),
   ageGroups: z.array(z.enum(AGE_GROUPS as unknown as [string, ...string[]])).min(1),
   startDate: z.coerce.date(),
@@ -27,7 +27,7 @@ export const courseUpdateSchema = z
     lessonType: z.enum([LESSON_TYPES.ONE_ON_ONE, LESSON_TYPES.GROUP]).optional(),
     studentCapacity: z.coerce.number().int().min(1).optional(),
     mode: z.enum([COURSE_MODE.ONLINE, COURSE_MODE.IN_PERSON]).optional(),
-    pricePerLesson: z.coerce.number().min(0).optional(),
+    price: z.coerce.number().min(0).optional(),
     currency: z.string().optional(),
     ageGroups: z.array(z.enum(AGE_GROUPS as unknown as [string, ...string[]])).optional(),
     startDate: z.coerce.date().optional(),
@@ -45,7 +45,6 @@ export const courseUpdateSchema = z
   );
 
 export type CourseUpdateDTO = z.infer<typeof courseUpdateSchema>;
-// export const courseUpdateSchema = courseCreateSchema.partial();
 
 export const listQuerySchema = z.object({
   search: z.string().max(120).optional(),
@@ -54,7 +53,7 @@ export const listQuerySchema = z.object({
   isTrialAvailable: z
     .union([z.boolean(), z.string()])
     .optional()
-    .transform(v => (typeof v === 'boolean' ? v : v?.toLowerCase() === 'true')),
+    .transform(v => (typeof v === 'boolean' ? v : v ? v?.toLowerCase() === 'true' : undefined)),
   priceMin: z.coerce.number().min(0).optional(),
   priceMax: z.coerce.number().min(0).optional(),
   dateFrom: z.coerce.date().optional(),

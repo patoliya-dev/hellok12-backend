@@ -8,7 +8,7 @@ export interface CourseDoc extends Document {
   lessonType: LessonType;
   studentCapacity: number;
   mode: CourseMode;
-  pricePerLesson: number;
+  price: number;
   currency: string; // e.g. "USD"
   ageGroups: string[]; // ["6-8","9-12"] etc.
   startDate: Date;
@@ -39,7 +39,7 @@ const CourseSchema = new Schema<CourseDoc>(
     lessonType: { type: String, enum: ['1-on-1', 'group'], required: true },
     studentCapacity: { type: Number, min: 1, default: 1 },
     mode: { type: String, enum: ['online', 'in-person'], required: true },
-    pricePerLesson: { type: Number, min: 0, index: true, required: true },
+    price: { type: Number, min: 0, index: true, required: true },
     currency: { type: String, default: 'USD' },
     ageGroups: { type: [String], enum: AGE_GROUPS, required: true, default: [] },
 

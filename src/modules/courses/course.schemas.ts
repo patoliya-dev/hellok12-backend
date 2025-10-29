@@ -45,7 +45,6 @@ export const courseUpdateSchema = z
   );
 
 export type CourseUpdateDTO = z.infer<typeof courseUpdateSchema>;
-// export const courseUpdateSchema = courseCreateSchema.partial();
 
 export const listQuerySchema = z.object({
   search: z.string().max(120).optional(),
@@ -54,7 +53,7 @@ export const listQuerySchema = z.object({
   isTrialAvailable: z
     .union([z.boolean(), z.string()])
     .optional()
-    .transform(v => (typeof v === 'boolean' ? v : v?.toLowerCase() === 'true')),
+    .transform(v => (typeof v === 'boolean' ? v : v ? v?.toLowerCase() === 'true' : undefined)),
   priceMin: z.coerce.number().min(0).optional(),
   priceMax: z.coerce.number().min(0).optional(),
   dateFrom: z.coerce.date().optional(),

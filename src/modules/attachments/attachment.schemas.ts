@@ -2,7 +2,14 @@ import { z } from 'zod';
 import config from '../../config/config';
 export const presignSchema = z.object({
   filename: z.string().min(1),
-  mime: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+  mime: z.enum([
+    'image/jpeg',
+    'image/png',
+    'image/webp',
+    'application/pdf',
+    'video/mp4',
+    'video/mov'
+  ]),
   size: z
     .number()
     .int()

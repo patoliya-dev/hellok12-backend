@@ -702,16 +702,29 @@ export const authService = {
       } else if (role === 'teacher') {
         populateQuery = {
           path: 'teacherProfile',
-          populate: {
-            path: 'certificates',
-            model: 'Attachment',
-            select: 'url key name size'
-          }
+          populate: [
+            {
+              path: 'certificates',
+              model: 'Attachment',
+              select: 'url key name size',
+              match: { status: 'READY' }
+            },
+            {
+              path: 'highlights',
+              model: 'Attachment',
+              select: 'url key name size createdAt mime',
+              match: { status: 'READY' }
+            }
+          ]
         };
       }
 
       const user: any = await User.findById(userId)
-        .populate({ path: 'profileImage', match: { status: 'READY' }, select: 'url' })
+        .populate({
+          path: 'profileImage',
+          match: { status: 'READY', entityType: 'User' },
+          select: 'url'
+        })
         .populate(populateQuery)
         .lean({ virtuals: true });
 

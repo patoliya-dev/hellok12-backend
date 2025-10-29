@@ -10,7 +10,15 @@ import Logger from '../../utils/winstonLogger.utils';
 const BUCKET = config.AWS_CONFIG.S3_ASSET_BUCKET!;
 const BASE = (config.AWS_CONFIG.S3_ASSETS_PUBLIC_BASE || '').replace(/\/$/, '');
 const MAX_BYTES_DEFAULT = 5 * 1024 * 1024; // 5MB default
-const ALLOWED_MIME = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp']); // tweak as needed
+const ALLOWED_MIME = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/jpg',
+  'image/webp',
+  'application/pdf',
+  'video/mp4',
+  'video/mov'
+]); // tweak as needed
 
 /**
  * Build S3 key prefix.
@@ -35,6 +43,9 @@ function buildUploadPrefix({
   } else if (entityType === 'User' && entityId && scope) {
     const s = scope;
     return `users/${entityId}/${s}`;
+  } else if (entityType === 'TeacherProfile' && entityId && scope) {
+    const s = scope;
+    return `teacherProfiles/${entityId}/${s}`;
   }
   // Fallback (staging): uploads/<userId>/staged
   return `uploads/${userId}/staged`;
@@ -53,7 +64,6 @@ export const presign = async (req: Request, res: Response) => {
         .status(400)
         .json(createErrorResponse('Missing required params', 'Bad Request', 400));
     }
-
     if (!ALLOWED_MIME.has(mime)) {
       return res
         .status(422)

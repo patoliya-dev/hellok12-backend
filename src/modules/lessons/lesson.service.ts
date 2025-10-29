@@ -11,6 +11,7 @@ type UpdateArgs = {
     title?: string;
     description?: string;
     schedule?: { date?: Date; time?: string; duration?: number };
+    status?: 'draft' | 'active' | 'archived';
     isTrialAvailable?: boolean;
     trialCapacity?: number;
     order?: number;
@@ -55,7 +56,7 @@ async function checkOverlap({
   const q: any = {
     teacherId,
     courseId,
-    status: { $ne: 'cancelled' },
+    status: { $ne: 'archived' },
     startAt: { $lt: endAt },
     endAt: { $gt: startAt }
   };
@@ -70,11 +71,11 @@ async function checkOverlap({
 
 async function recomputeCourseTrialAvailability(courseId: Types.ObjectId) {
   const now = new Date();
-  const trial = await Lesson.findOne({
+  const trial = await Lesson.exists({
     courseId,
     isTrialAvailable: true,
     startAt: { $gte: now },
-    status: { $ne: 'cancelled' }
+    status: { $ne: 'archived' }
   })
     .select({ _id: 1 })
     .lean();
@@ -194,6 +195,7 @@ export const LessonService = {
 
   // CREATE MANY
   async bulkCreateForCourse({ courseId, lessons }: CreateArgs) {
+    // Validate course existence
     const course = await Course.findById(courseId).lean();
     if (!course) {
       const e = new Error('Course not found');
@@ -202,29 +204,57 @@ export const LessonService = {
     }
     const teacherId: Types.ObjectId = (course as any).teacherId || (course as any).ownerId;
 
+    if (!teacherId) {
+      const e = new Error('Course missing assigned teacher');
+      (e as any).code = '422_VALIDATION';
+      (e as any).fields = [{ path: 'course.teacherId', message: 'Assigned teacher is required' }];
+      throw e;
+    }
+
+    // Precompute next order
     let nextOrder = await getNextOrderForCourse(courseId);
+
     const docs = [];
 
-    for (const l of lessons) {
+    // Validate and build lesson docs
+    for (let i = 0; i < lessons.length; i++) {
+      const l = lessons[i];
+      if (!l.schedule?.time || !l.schedule?.date) {
+        const e = new Error('Missing schedule time/date');
+        (e as any).code = '422_VALIDATION';
+        (e as any).fields = [
+          { path: `lessons.${i}.schedule.time`, message: 'Time is required' },
+          { path: `lessons.${i}.schedule.date`, message: 'Date is required' }
+        ];
+        throw e;
+      }
+
       const { startAt, endAt } = parseStartEnd(l.schedule);
+
+      // Prevent overlap conflicts
       await checkOverlap({ teacherId, courseId, startAt, endAt });
 
       docs.push({
         courseId,
         teacherId,
         title: l.title,
-        description: l.description ?? undefined,
+        description: l.description?.trim() ?? undefined,
         schedule: l.schedule,
         startAt,
         endAt,
+        status: l.status || 'draft',
         isTrialAvailable: !!l.isTrialAvailable,
-        trialCapacity: l.isTrialAvailable ? (l.trialCapacity ?? undefined) : undefined,
+        trialCapacity: l.isTrialAvailable ? (l.trialCapacity ?? 1) : undefined,
         order: typeof l.order === 'number' ? l.order : nextOrder++
       });
     }
 
+    // Insert atomically
     const created = await Lesson.insertMany(docs);
-    // optional: recompute course.isTrialAvailable
+
+    // Recompute course.isTrialAvailable
+    await recomputeCourseTrialAvailability(courseId);
+
     return { items: created.map(d => d.toObject()), count: created.length };
   },
 
@@ -260,6 +290,7 @@ export const LessonService = {
       if (u.trialCapacity !== undefined) $set.trialCapacity = u.trialCapacity;
       if (u.order !== undefined) $set.order = u.order;
       if (u.vocabulary !== undefined) $set.vocabulary = u.vocabulary;
+      if (u.status !== undefined) $set.status = u.status;
 
       if (u.schedule) {
         const base = await Lesson.findOne({ _id, courseId }).select({ schedule: 1 }).lean();
@@ -287,10 +318,17 @@ export const LessonService = {
 
     if (ops.length === 0) {
       const current = await Lesson.find({ courseId }).lean();
+
+      // Recompute course.isTrialAvailable
+      await recomputeCourseTrialAvailability(courseId);
+
       return { items: current, count: current.length };
     }
 
     await Lesson.bulkWrite(ops, { ordered: false });
+
+    // Recompute course.isTrialAvailable
+    await recomputeCourseTrialAvailability(courseId);
 
     const refreshed = await Lesson.find({ courseId }).sort({ order: 1 }).lean();
     return { items: refreshed, count: refreshed.length };

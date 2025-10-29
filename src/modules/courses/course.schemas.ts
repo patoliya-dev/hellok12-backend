@@ -51,7 +51,7 @@ export const listQuerySchema = z.object({
   search: z.string().max(120).optional(),
   language: z.string().max(10).optional(),
   status: z.enum(['draft', 'active', 'archived']).optional(),
-  trialAvailable: z
+  isTrialAvailable: z
     .union([z.boolean(), z.string()])
     .optional()
     .transform(v => (typeof v === 'boolean' ? v : v?.toLowerCase() === 'true')),

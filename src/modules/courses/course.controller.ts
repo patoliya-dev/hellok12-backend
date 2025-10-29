@@ -85,7 +85,7 @@ export const duplicateCourse = async (req: Request, res: Response) => {
 };
 
 export const getCourseDetail = async (req: Request, res: Response) => {
-  const data = await CourseService.getById(req.params.id);
+  const data = await CourseService.getByIdWithLessons(req.params.id);
   if (!data) return res.status(404).json(createErrorResponse('Course not found', 'Not found', 404));
   return res.json(createSuccessResponse(data));
 };

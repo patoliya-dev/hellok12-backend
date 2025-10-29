@@ -27,7 +27,7 @@ interface ValidatedRequest extends Request {
 
 // Main validation middleware that stores validated data
 export const validateRequest = (schema: ZodSchema) => {
-  return async (req: ValidatedRequest, res: Response, next: NextFunction): Promise<void> => {
+  return async (req: ValidatedRequest, res: Response, next: NextFunction): Promise<any> => {
     try {
       const validated = (await schema.parseAsync({
         body: req.body,
@@ -42,37 +42,26 @@ export const validateRequest = (schema: ZodSchema) => {
 
       next();
     } catch (error) {
+      // Handle Zod validation errors cleanly
       if (error instanceof ZodError) {
-        const errorMessages = error.issues.map((issue: ZodIssue) => {
-          const errorObj: any = {
-            path: issue.path.join('.'),
-            message: issue.message,
-            code: issue.code
-          };
+        const fields = error.issues.map((issue: ZodIssue) => ({
+          path: issue.path.join('.'),
+          message: issue.message,
+          code: issue.code,
+          received: (issue as any).received ?? (issue as any).input ?? 'invalid'
+        }));
 
-          // Handle different types of Zod issues
-          if ('received' in issue && issue.received !== undefined) {
-            errorObj.received = issue.received;
-          } else if ('input' in issue && issue.input !== undefined) {
-            errorObj.received = (issue as any).input;
-          } else {
-            errorObj.received = 'invalid';
-          }
-
-          return errorObj;
-        });
-
-        res
+        // Return structured details instead of JSON.stringify
+        return res
           .status(400)
-          .json(createErrorResponse(JSON.stringify(errorMessages), 'Validation failed', 400));
-        return;
+          .json(createErrorResponse('Validation failed', 'VALIDATION_FAILED', 400, { fields }));
       }
 
-      console.error('Validation middleware error:', error);
-      res
+      // Catch any unexpected middleware errors
+      return res
         .status(500)
         .json(
-          createErrorResponse('Internal server error during validation', 'Validation error', 500)
+          createErrorResponse('Internal server error during validation', 'VALIDATION_ERROR', 500)
         );
     }
   };

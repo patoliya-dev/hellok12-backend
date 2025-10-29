@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { normalizeTime12h } from '../../utils/validators';
 
 const id24 = z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid id');
-const time12h = /^(0?[1-9]|1[0-2]):[0-5]\d\s?(AM|PM)$/i;
+const TIME_12H = /^(0?[1-9]|1[0-2]):[0-5]\d\s?(AM|PM)$/i;
 
 export const lessonCreateSchema = z.object({
   courseId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid courseId'),
@@ -30,12 +30,34 @@ export const lessonReorderSchema = z.object({
 });
 
 export const lessonScheduleSchema = z.object({
-  date: z.preprocess(v => new Date(v as any), z.date()),
-  time: z.preprocess(
-    v => normalizeTime12h(v),
-    z.string().regex(time12h, 'Invalid time; expected "HH:MM AM/PM"')
-  ),
-  duration: z.coerce.number().int().min(1).max(180)
+  date: z
+    .preprocess(v => {
+      if (v === '' || v === null || v === undefined) return undefined;
+      const d = v instanceof Date ? v : new Date(String(v));
+      return isNaN(d.getTime()) ? undefined : d;
+    }, z.date())
+    .refine(d => d instanceof Date && !isNaN(d.getTime()), {
+      message: 'Invalid date'
+    }),
+
+  time: z
+    .string()
+    .refine(v => v !== undefined && v !== null && String(v).trim() !== '', {
+      message: 'Time is required'
+    })
+    .refine(v => TIME_12H.test(String(v).trim()), {
+      message: 'Time must be in format HH:MM AM/PM'
+    }),
+
+  duration: z
+    .preprocess(v => {
+      if (v === '' || v === null || v === undefined) return undefined;
+      const n = typeof v === 'string' ? Number(v) : v;
+      return n;
+    }, z.number().int())
+    .refine(n => Number.isInteger(n), { message: 'Duration must be an integer' })
+    .refine(n => n >= 30, { message: 'Duration must be at least 30 minute' })
+    .refine(n => n <= 60, { message: 'Duration must be ≤ 60 minutes' })
 });
 
 export const lessonCreateItemSchema = z.object({

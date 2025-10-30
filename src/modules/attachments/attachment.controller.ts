@@ -40,9 +40,9 @@ function buildUploadPrefix({
   if (entityType === 'Course' && entityId) {
     const s = scope || 'intro';
     return `courses/${entityId}/${s}`;
-  } else if (entityType === 'User' && entityId && scope) {
+  } else if (entityType === 'User' && entityId) {
     const s = scope;
-    return `users/${entityId}/${s}`;
+    return `users/${entityId}${s ? `/${s}` : ''}`;
   } else if (entityType === 'TeacherProfile' && entityId && scope) {
     const s = scope;
     return `teacherProfiles/${entityId}/${s}`;

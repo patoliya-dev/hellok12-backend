@@ -14,7 +14,7 @@ export const presignSchema = z.object({
     .number()
     .int()
     .min(1)
-    .max(Number(config.AWS_CONFIG.MAX_UPLOAD_MB || 5) * 1024 * 1024),
+    .max(Number(config.AWS_CONFIG.S3_MAX_UPLOAD_MB || 5) * 1024 * 1024),
   entityType: z.string().optional(),
   entityId: z.string().optional()
 });

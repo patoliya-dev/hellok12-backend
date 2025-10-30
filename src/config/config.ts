@@ -27,7 +27,7 @@ interface Config {
   AWS_CONFIG: {
     S3_ASSET_BUCKET: string;
     S3_ASSETS_PUBLIC_BASE: string;
-    MAX_UPLOAD_MB: number;
+    S3_MAX_UPLOAD_MB: number;
   };
 }
 
@@ -51,7 +51,7 @@ const config: Config = {
   AWS_CONFIG: {
     S3_ASSET_BUCKET: process.env.S3_ASSET_BUCKET || 'hellok12-assets-dev',
     S3_ASSETS_PUBLIC_BASE: `https://${process.env.S3_ASSET_BUCKET || 'hellok12-assets-dev'}.s3.us-east-1.amazonaws.com`,
-    MAX_UPLOAD_MB: 5
+    S3_MAX_UPLOAD_MB: 5
   }
 };
 

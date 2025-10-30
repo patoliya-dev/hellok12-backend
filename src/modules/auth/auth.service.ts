@@ -801,12 +801,50 @@ export const authService = {
             populate: { path: 'studentProfile' }
           }
         };
+      } else if (role === 'teacher') {
+        populateQuery = {
+          path: 'teacherProfile',
+          populate: [
+            {
+              path: 'certificates',
+              model: 'Attachment',
+              select: 'url key name size',
+              match: { status: 'READY' }
+            },
+            {
+              path: 'highlights',
+              model: 'Attachment',
+              select: 'url key name size createdAt mime',
+              match: { status: 'READY' }
+            }
+          ]
+        };
       }
-      const populatedUser = await User.findById(userId)
+
+      const user: any = await User.findById(userId)
+        .populate({
+          path: 'profileImage',
+          match: { status: 'READY', entityType: 'User' },
+          select: 'url'
+        })
         .populate(populateQuery)
         .select('-password')
-        .lean();
-      return populatedUser;
+        .lean({ virtuals: true });
+
+      if (!user) throw new Error('User not found');
+
+      return {
+        id: user._id.toString(),
+        email: user.email!,
+        name: user.name,
+        role: user.role,
+        phone: user.phone,
+        isVerified: user.isVerified,
+        children: user.role === 'parent' ? user.children : undefined,
+        profile: user[`${role}Profile`],
+        schoolName: user[`${role}Profile`]?.schoolName,
+        profileImage: user?.profileImage
+      };
     } catch (error) {
       // await session.abortTransaction();
       // await session.endSession();

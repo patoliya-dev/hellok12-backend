@@ -148,12 +148,24 @@ export const bulkUpdateForCourse = async (req: Request, res: Response) => {
     const result = await LessonService.bulkUpdateForCourse({ courseId, updates, deletes });
     return res.status(200).json(createSuccessResponse(result, 'Lessons updated', 200));
   } catch (err: any) {
-    const code = err?.code;
-    if (code === '409_CONFLICT_OVERLAP') {
-      return res.status(409).json(createErrorResponse(err.message, code, 409));
+    switch (err.code) {
+      case '404_NOT_FOUND':
+        return res.status(404).json(createErrorResponse(err.message, '404_NOT_FOUND', 404));
+
+      case '409_CONFLICT_OVERLAP':
+        return res.status(409).json(createErrorResponse(err.message, '409_CONFLICT_OVERLAP', 409));
+
+      case '422_VALIDATION':
+        return res
+          .status(422)
+          .json(
+            createErrorResponse(JSON.stringify({ fields: err.fields || [] }), '422_VALIDATION', 422)
+          );
+
+      default:
+        return res
+          .status(500)
+          .json(createErrorResponse('Failed to create lessons', 'Internal Server Error', 500));
     }
-    return res
-      .status(500)
-      .json(createErrorResponse('Failed to update lessons', 'Internal Server Error', 500));
   }
 };

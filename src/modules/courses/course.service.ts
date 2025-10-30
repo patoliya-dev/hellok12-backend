@@ -12,7 +12,7 @@ export const CourseService = {
       lessonType: data.lessonType,
       studentCapacity: data.studentCapacity ?? 1,
       mode: data.mode,
-      pricePerLesson: data.pricePerLesson,
+      price: data.price,
       currency: data.currency ?? 'USD',
       ageGroups: data.ageGroups,
       startDate: data.startDate,
@@ -145,9 +145,9 @@ export const CourseService = {
     }
 
     if (query.priceMin != null || query.priceMax != null) {
-      filter.pricePerLesson = {};
-      if (query.priceMin != null) filter.pricePerLesson.$gte = query.priceMin;
-      if (query.priceMax != null) filter.pricePerLesson.$lte = query.priceMax;
+      filter.price = {};
+      if (query.priceMin != null) filter.price.$gte = query.priceMin;
+      if (query.priceMax != null) filter.price.$lte = query.priceMax;
     }
 
     if (query.dateFrom || query.dateTo) {
@@ -177,8 +177,8 @@ export const CourseService = {
       languageDesc: { language: -1, _id: 1 },
       studentsAsc: { enrolledCount: 1, _id: 1 },
       studentsDesc: { enrolledCount: -1, _id: 1 },
-      priceAsc: { pricePerLesson: 1, _id: 1 },
-      priceDesc: { pricePerLesson: -1, _id: 1 },
+      priceAsc: { price: 1, _id: 1 },
+      priceDesc: { price: -1, _id: 1 },
       statusAsc: { status: 1, _id: 1 },
       statusDesc: { status: -1, _id: 1 },
       startDateAsc: { startDate: 1, _id: 1 },

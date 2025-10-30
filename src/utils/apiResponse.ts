@@ -20,10 +20,12 @@ export const createSuccessResponse = <T>(
 export const createErrorResponse = (
   error: string,
   message: string = 'Error',
-  statusCode: number = 400
+  statusCode: number = 400,
+  details?: Record<string, any>
 ): ApiResponse => ({
   success: false,
   message,
   error,
-  statusCode
+  statusCode,
+  ...(details ? { details } : {})
 });

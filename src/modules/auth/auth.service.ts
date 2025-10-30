@@ -751,8 +751,6 @@ export const authService = {
   },
 
   updateCurrentUser: async (userId: string, body: any): Promise<any> => {
-    // const session = await mongoose.startSession();
-    // session.startTransaction();
     try {
       const allowedUserFields = ['name', 'email', 'phone'];
       const userUpdateFields: Record<string, any> = {};
@@ -789,8 +787,6 @@ export const authService = {
           { new: true, runValidators: true, omitUndefined: true }
         );
       }
-      // await session.commitTransaction();
-      // await session.endSession();
 
       let populateQuery: any = { path: `${role}Profile` };
       if (role === 'parent') {
@@ -846,8 +842,6 @@ export const authService = {
         profileImage: user?.profileImage
       };
     } catch (error) {
-      // await session.abortTransaction();
-      // await session.endSession();
       Logger.error('Update current user failed:', error);
       throw error;
     }
@@ -887,6 +881,17 @@ export const authService = {
 
       if (parent.role !== 'parent') {
         throw new Error('Parent must be a parent');
+      }
+
+      if (studentData?.email) {
+        const checkIfExists = await User.findOne({
+          email: studentData?.email
+        })
+          .select('-password')
+          .lean();
+        if (checkIfExists) {
+          throw new Error('A user with this email already exists');
+        }
       }
 
       const studentUser = await User.create({

@@ -1,8 +1,8 @@
 import { z } from 'zod';
-import { normalizeTime12h } from '../../utils/validators';
 
 const id24 = z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid id');
 const TIME_12H = /^(0?[1-9]|1[0-2]):[0-5]\d\s?(AM|PM)$/i;
+const toDate = (v: unknown) => (typeof v === 'string' && v ? new Date(v) : undefined);
 
 export const lessonCreateSchema = z.object({
   courseId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid courseId'),
@@ -112,3 +112,38 @@ export const lessonItemSchema = z.object({
 
 export type BulkUpdateLessonsInput = z.infer<typeof bulkUpdateLessonsSchema>;
 export type LessonItemInput = z.infer<typeof lessonItemSchema>;
+
+export const listLessonsQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+
+  search: z.string().trim().optional().default(''),
+
+  // accept either startDate/endDate or dateFrom/dateTo (mirrors course API names)
+  startDate: z.preprocess(toDate, z.date().optional()),
+  endDate: z.preprocess(toDate, z.date().optional()),
+  dateFrom: z.preprocess(toDate, z.date().optional()),
+  dateTo: z.preprocess(toDate, z.date().optional()),
+
+  // optional filters aligned to your model
+  status: z.enum(['draft', 'active', 'archived']).optional(),
+  isTrialAvailable: z.coerce.boolean().optional(),
+
+  // two styles supported:
+  // 1) sortBy (like courses API)
+  sortBy: z
+    .enum([
+      'newest',
+      'titleAsc',
+      'titleDesc',
+      'startAtAsc',
+      'startAtDesc',
+      'statusAsc',
+      'statusDesc'
+    ])
+    .optional(),
+
+  // 2) sortKey + sortDirection (compatible with your curl)
+  sortKey: z.enum(['title', 'startAt', 'createdAt', 'status']).optional(),
+  sortDirection: z.enum(['asc', 'desc']).optional()
+});

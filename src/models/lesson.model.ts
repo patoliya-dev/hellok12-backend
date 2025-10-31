@@ -92,5 +92,8 @@ LessonSchema.pre('validate', function (next) {
 LessonSchema.index({ courseId: 1, order: 1 });
 LessonSchema.index({ courseId: 1, startAt: 1 });
 LessonSchema.index({ isTrialAvailable: 1, startAt: 1 });
+LessonSchema.index({ courseId: 1, startAt: -1 });
+LessonSchema.index({ courseId: 1, title: 1 });
+LessonSchema.index({ courseId: 1, status: 1 });
 
 export const Lesson = model<LessonDoc>('Lesson', LessonSchema);

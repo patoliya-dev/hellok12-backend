@@ -1,6 +1,6 @@
 import { Lesson, LessonDoc } from '../../models/lesson.model';
 import { Course } from '../../models/course.model';
-import { Types } from 'mongoose';
+import { FilterQuery, Types } from 'mongoose';
 import { LessonItemInput } from './lesson.schemas';
 
 type CreateArgs = { courseId: Types.ObjectId; lessons: LessonItemInput[] };
@@ -19,6 +19,35 @@ type UpdateArgs = {
   }>;
   deletes: string[];
 };
+
+type ListOpts = {
+  search?: string;
+  status?: 'draft' | 'active' | 'archived';
+  isTrialAvailable?: boolean;
+  dateFrom?: Date;
+  dateTo?: Date;
+  sort?: Record<string, 1 | -1>;
+  page: number;
+  limit: number;
+};
+
+const defaultSort: Record<string, 1 | -1> = { startAt: -1, _id: 1 };
+
+const sortMap: Record<string, Record<string, 1 | -1>> = {
+  newest: { createdAt: -1, _id: 1 },
+  titleAsc: { title: 1, _id: 1 },
+  titleDesc: { title: -1, _id: 1 },
+  startAtAsc: { startAt: 1, _id: 1 },
+  startAtDesc: { startAt: -1, _id: 1 },
+  statusAsc: { status: 1, _id: 1 },
+  statusDesc: { status: -1, _id: 1 }
+};
+
+function fromKeyDir(key?: string, dir?: 'asc' | 'desc') {
+  if (!key || !dir) return undefined;
+  const d = dir.toLowerCase() === 'asc' ? 1 : -1;
+  return { [key]: d, _id: 1 } as Record<string, 1 | -1>;
+}
 
 function parseStartEnd(schedule: { date: Date; time: string; duration: number }) {
   const [hhmm, ampm] = schedule.time.split(' ');
@@ -173,24 +202,57 @@ export const LessonService = {
     if (bulk.length) await Lesson.bulkWrite(bulk);
     return true;
   },
+  resolveSort(q: {
+    sortBy?: keyof typeof sortMap;
+    sortKey?: 'title' | 'startAt' | 'createdAt' | 'status';
+    sortDirection?: 'asc' | 'desc';
+  }) {
+    // priority: sortBy (same as Courses API)
+    if (q.sortBy && sortMap[q.sortBy]) return sortMap[q.sortBy];
+    // fallback: key+direction (compatible with your curl)
+    const kd = fromKeyDir(q.sortKey, q.sortDirection);
+    return kd || defaultSort;
+  },
 
-  async listByCourse(
-    courseId: string,
-    opts: { from?: Date; to?: Date; page?: number; limit?: number; sort?: any } = {}
-  ) {
-    const { from, to, page = 1, limit = 20, sort = { order: 1, startAt: 1 } } = opts;
-    const filter: any = { courseId };
-    if (from || to) {
-      filter.startAt = {};
-      if (from) filter.startAt.$gte = from;
-      if (to) filter.startAt.$lte = to;
+  async listByCourse(courseId: string, opts: ListOpts) {
+    const filter: FilterQuery<LessonDoc> = { courseId: new Types.ObjectId(courseId) };
+
+    if (opts.status) filter.status = opts.status;
+    if (typeof opts.isTrialAvailable === 'boolean') {
+      filter.isTrialAvailable = opts.isTrialAvailable;
     }
-    const skip = (page - 1) * limit;
+
+    // date range on startAt (consistent field used elsewhere)
+    if (opts.dateFrom || opts.dateTo) {
+      filter.startAt = {};
+      if (opts.dateFrom) filter.startAt.$gte = opts.dateFrom;
+      if (opts.dateTo) filter.startAt.$lte = opts.dateTo;
+    }
+
+    if (opts.search) {
+      filter.$or = [
+        { title: { $regex: opts.search, $options: 'i' } },
+        { description: { $regex: opts.search, $options: 'i' } }
+      ];
+    }
+
+    const sort = opts.sort || defaultSort;
+    const skip = (opts.page - 1) * opts.limit;
+
     const [items, total] = await Promise.all([
-      Lesson.find(filter).sort(sort).skip(skip).limit(limit).lean(),
+      Lesson.find(filter).sort(sort).skip(skip).limit(opts.limit).lean(),
       Lesson.countDocuments(filter)
     ]);
-    return { items, pagination: { page, limit, total, pages: Math.ceil(total / limit) } };
+
+    return {
+      items,
+      pagination: {
+        page: opts.page,
+        limit: opts.limit,
+        total,
+        pages: Math.ceil(total / opts.limit)
+      }
+    };
   },
 
   // CREATE MANY

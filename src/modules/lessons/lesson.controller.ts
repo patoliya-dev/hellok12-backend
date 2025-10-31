@@ -1,6 +1,11 @@
 import { Request, Response } from 'express';
 import { createErrorResponse, createSuccessResponse } from '../../utils/apiResponse';
-import { lessonCreateSchema, lessonUpdateSchema, lessonReorderSchema } from './lesson.schemas';
+import {
+  lessonCreateSchema,
+  lessonUpdateSchema,
+  lessonReorderSchema,
+  listLessonsQuerySchema
+} from './lesson.schemas';
 import { LessonService } from './lesson.service';
 import { CourseService } from '../courses/course.service';
 import { LessonDoc } from '../../models/lesson.model';
@@ -39,8 +44,8 @@ export const updateLesson = async (req: Request, res: Response) => {
     const { courseId, teacherId, ...rest } = parsed.data;
     const payload: Partial<LessonDoc> = {
       ...rest,
-      teacherId: new Types.ObjectId(teacherId || req.user!.id),
-      courseId: new Types.ObjectId(courseId)
+      ...(teacherId && { teacherId: new Types.ObjectId(teacherId) }),
+      ...(courseId && { courseId: new Types.ObjectId(courseId) })
     };
 
     const updated = await LessonService.update(req.params.id, payload);
@@ -92,21 +97,32 @@ export const listLessonsForCourse = async (req: Request, res: Response) => {
     return res.status(404).json(createErrorResponse('Course not found', 'Not Found', 404));
   }
 
-  const page = Math.max(1, Number(req.query.page ?? 1) || 1);
-  const limit = Math.max(1, Math.min(100, Number(req.query.limit ?? 20) || 20));
+  const parsed = listLessonsQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    return res.status(422).json(createErrorResponse(parsed.error.message, 'Validation Error', 422));
+  }
 
-  // Optional date filters (accept ISO strings)
-  const from = req.query.from ? new Date(String(req.query.from)) : undefined;
-  const to = req.query.to ? new Date(String(req.query.to)) : undefined;
-  // const page = Number(req.query.page || 1);
-  // const limit = Number(req.query.limit || 20);
-  const data = await LessonService.listByCourse(req.params.courseId, {
-    from,
-    to,
-    page,
-    limit
+  const q = parsed.data;
+
+  // normalize date inputs to a single range (align to Courses names)
+  const dateFrom = q.startDate ?? q.dateFrom;
+  const dateTo = q.endDate ?? q.dateTo;
+
+  // prefer sortBy (like Courses), otherwise honor sortKey/sortDirection (your curl)
+  const sort = LessonService.resolveSort(q);
+
+  const result = await LessonService.listByCourse(courseId, {
+    search: q.search,
+    status: q.status,
+    isTrialAvailable: q.isTrialAvailable,
+    dateFrom,
+    dateTo,
+    sort,
+    page: q.page,
+    limit: q.limit
   });
-  return res.json(createSuccessResponse({ ...data, course }));
+
+  return res.json(createSuccessResponse({ ...result, course }));
 };
 
 export const bulkCreateForCourse = async (req: Request, res: Response) => {

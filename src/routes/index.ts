@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import authRoutes from './auth.routes';
-import attachmentRoutes from '../modules/attachments/attachment.routes';
 import courseRoutes from '../modules/courses/course.routes';
 import lessonRoutes from '../modules/lessons/lesson.routes';
+import attachmentRoutes from '../modules/attachments/attachment.routes';
 // Future imports:
 // import userRoutes from './user.routes';
 // import schoolRoutes from './school.routes';

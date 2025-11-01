@@ -1,5 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { authService } from './auth.service';
+import { createErrorResponse } from '../../utils/apiResponse';
+import { body } from 'express-validator';
 
 export const authController = {
   signup: async (req: Request, res: Response, next: NextFunction) => {
@@ -193,9 +195,73 @@ export const authController = {
     try {
       if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
 
-      const user = await authService.getCurrentUser(req.user.id);
+      const user = await authService.getCurrentUser(req.user.id, req.user.role);
       res.json({
         success: true,
+        data: user
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        message: 'Server error',
+        error: err.message
+      });
+    }
+  },
+
+  updateCurrentUser: async (req: Request, res: Response) => {
+    try {
+      const { userId } = req.params;
+      if (!userId) {
+        return res.status(401).json(createErrorResponse('Unauthorized', 'Unauthorized', 401));
+      }
+
+      const user = await authService.updateCurrentUser(userId, req.body);
+
+      res.json({
+        success: true,
+        data: user
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        message: 'Server error',
+        error: err.message
+      });
+    }
+  },
+
+  deleteChildren: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { childrenId } = req.params as { childrenId: string };
+      const userId = req.user?.id;
+      if (!userId) {
+        return res.status(401).json(createErrorResponse('Unauthorized', 'Unauthorized', 401));
+      }
+      await authService.deleteChildren(userId, childrenId);
+      res.json({
+        success: true,
+        message: 'Children deleted successfully'
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        message: 'Server error',
+        error: err.message
+      });
+    }
+  },
+
+  addStudentToParent: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        return res.status(401).json(createErrorResponse('Unauthorized', 'Unauthorized', 401));
+      }
+      const user = await authService.addStudentToParent(userId, req.body);
+      res.json({
+        success: true,
+        message: 'Student added successfully',
         data: user
       });
     } catch (err: any) {

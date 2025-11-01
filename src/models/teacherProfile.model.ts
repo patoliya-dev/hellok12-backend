@@ -18,11 +18,11 @@ const TeacherProfileSchema = new Schema(
     teachingStyle: { type: String, default: '' },
     whyTeaching: { type: String, default: '' },
 
-    teachingLanguages: [{ type: Schema.Types.ObjectId, ref: 'Language' }],
-    nativeLanguage: { type: Schema.Types.ObjectId, ref: 'Language' },
-    ageGroupTeach: { type: Schema.Types.ObjectId, ref: 'AgeGroup' },
+    teachingLanguages: { type: [String], default: [] },
+    nativeLanguage: { type: String, default: '' },
+    ageGroupTeach: { type: [String], default: [] },
 
-    teachingSpecialties: { type: [String], default: [] },
+    teachingSpecialties: { type: String, default: '' },
 
     highestEducation: { type: String, default: '' },
     certification: { type: String, default: '' },
@@ -38,7 +38,13 @@ const TeacherProfileSchema = new Schema(
     teachingMode: { type: String, enum: ['ONLINE', 'IN_PERSON'], default: 'ONLINE' },
     travelFee: { type: String, default: '' },
     maxStudentsPerGroup: { type: String, default: '' },
-    specialNotes: { type: String, default: '' }
+    specialNotes: { type: String, default: '' },
+
+    dateOfBirth: { type: Date },
+    yearsOfExperience: { type: Number, default: 0 },
+    travelRadius: { type: Number, default: 0 },
+    highlights: [{ type: Schema.Types.ObjectId, ref: 'Attachment' }],
+    intro: { type: Schema.Types.ObjectId, ref: 'Attachment' }
   },
   { timestamps: true }
 );

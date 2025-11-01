@@ -13,6 +13,11 @@ import {
   TeacherRegistrationInput,
   SchoolRegistrationInput
 } from './auth.schemas';
+import { StudentProfileModel } from '../../models/studentProfile.model';
+import { ParentProfileModel } from '../../models/parentProfile.model';
+import { TeacherProfileModel } from '../../models/teacherProfile.model';
+import { SchoolProfileModel } from '../../models/schoolProfile.model';
+import { AttachmentModel } from '../../models/attachment.model';
 
 export interface AuthResult {
   user: {
@@ -24,6 +29,8 @@ export interface AuthResult {
     children?: any[];
     profile?: any;
     schoolName?: string;
+    profileImage?: any;
+    phone?: string;
   };
   accessToken?: string;
   refreshToken?: string;
@@ -84,15 +91,14 @@ export const authService = {
         phone: data.phone,
         isVerified: false,
         termsAccepted: data.termsAccepted,
-        marketingConsent: data.marketingConsent || false,
-        profile: {
-          grade: data.grade,
-          registrationSource: 'direct' // Independent student
-        }
+        marketingConsent: data.marketingConsent || false
       };
 
       const user = new User(userData);
       await user.save();
+
+      const studentProfile = new StudentProfileModel({ user: user._id });
+      await studentProfile.save();
 
       // Send student-specific verification email
       const verificationToken = generateRefreshToken({
@@ -138,13 +144,10 @@ export const authService = {
         phone: data.phone,
         isVerified: false,
         termsAccepted: data.termsAccepted,
-        marketingConsent: data.marketingConsent || false,
-        profile: {
-          address: data.address,
-          registrationSource: 'parent_with_children'
-        }
+        marketingConsent: data.marketingConsent || false
       };
 
+      // Save user collection
       const parent = new User(parentData);
       await parent.save();
 
@@ -159,23 +162,28 @@ export const authService = {
           role: 'student',
           parent: parent._id,
           isVerified: true, // Children are auto-verified through parent
-          termsAccepted: true, // Inherited from parent
-          profile: {
-            age: childData.age,
-            gender: childData.gender,
-            registrationSource: 'parent_created',
-            childIndex: i + 1 // Child 1, Child 2, etc. (from PDF)
-          }
+          termsAccepted: true // Inherited from parent
         });
 
+        const childProfile = new StudentProfileModel({
+          user: childUser._id,
+          age: childData.age,
+          gender: childData.gender
+        });
+
+        await childProfile.save();
         await childUser.save();
         children.push(childUser);
         childIds.push(childUser._id);
       }
 
-      // Update parent with children IDs
-      parent.children = childIds;
-      await parent.save();
+      // Save parent profile collection
+      const parentProfile = new ParentProfileModel({
+        user: parent._id,
+        address: data.address,
+        children: childIds
+      });
+      await parentProfile.save();
 
       // Send parent-specific verification email
       const verificationToken = generateRefreshToken({
@@ -224,19 +232,15 @@ export const authService = {
         phone: data.phone,
         isVerified: false,
         termsAccepted: data.termsAccepted,
-        marketingConsent: data.marketingConsent || false,
-        profile: {
-          bio: data.bio,
-          experience: data.experience || 0,
-          languages: data.languages || [],
-          employmentType: data.employmentType || 'independent',
-          hourlyRate: data.hourlyRate,
-          registrationSource: 'teacher_application'
-        }
+        marketingConsent: data.marketingConsent || false
       };
 
       const user = new User(userData);
       await user.save();
+
+      // Save teacher profile collection
+      const teacherProfile = new TeacherProfileModel({ user: user._id });
+      await teacherProfile.save();
 
       // Send teacher-specific verification email
       const verificationToken = generateRefreshToken({
@@ -277,20 +281,15 @@ export const authService = {
         phone: data.phone,
         isVerified: false,
         termsAccepted: data.termsAccepted,
-        marketingConsent: data.marketingConsent || false,
-        profile: {
-          schoolName: data.schoolName,
-          address: data.address,
-          description: data.description,
-          website: data.website,
-          registrationSource: 'school_application',
-          status: 'pending_approval' // Schools need admin approval
-        }
+        marketingConsent: data.marketingConsent || false
       };
 
       const user = new User(userData);
       await user.save();
 
+      // Save school profile collection
+      const schoolProfile = new SchoolProfileModel({ user: user._id, schoolName: data.schoolName });
+      await schoolProfile.save();
       // Send school-specific verification email
       const verificationToken = generateRefreshToken({
         id: user._id.toString(),
@@ -328,10 +327,7 @@ export const authService = {
     rememberMe: boolean = false
   ): Promise<AuthResult> => {
     try {
-      const user = await User.findOne({ email: email.toLowerCase() }).populate(
-        'children',
-        'name profile.age profile.gender'
-      );
+      const user = await User.findOne({ email: email.toLowerCase() });
 
       if (!user) {
         throw new Error('Invalid credentials'); // Matches PDF "Wrong password" message
@@ -405,10 +401,7 @@ export const authService = {
           email: user.email!,
           name: user.name,
           role: user.role,
-          isVerified: user.isVerified,
-          children: user.role === 'parent' ? user.children : undefined,
-          profile: user.profile,
-          schoolName: user.profile?.schoolName
+          isVerified: user.isVerified
         },
         accessToken,
         refreshToken,
@@ -428,11 +421,26 @@ export const authService = {
         throw new Error('Invalid verification token');
       }
 
-      const user = await User.findById(decoded.id).populate(
-        'children',
-        'name profile.age profile.gender'
-      );
+      const checkRole = await User.findById(decoded.id).select('role');
 
+      if (!checkRole) {
+        throw new Error('User not found');
+      }
+      let populateQuery: any = { path: `${checkRole.role}Profile` };
+      if (checkRole.role === 'parent') {
+        populateQuery = {
+          path: 'parentProfile',
+          populate: {
+            path: 'children',
+            populate: [
+              { path: 'studentProfile' },
+              { path: 'profileImage', match: { status: 'READY' }, select: 'url' }
+            ]
+          }
+        };
+      }
+
+      const user = await User.findById(decoded.id).populate(populateQuery);
       if (!user) {
         throw new Error('User not found');
       }
@@ -676,12 +684,55 @@ export const authService = {
   },
 
   // Get Current User
-  getCurrentUser: async (userId: string): Promise<AuthResult['user']> => {
+  getCurrentUser: async (userId: string, role: string): Promise<AuthResult['user']> => {
     try {
-      const user = await User.findById(userId)
-        .select('-password')
-        .populate('children', 'name profile.age profile.gender')
-        .populate('school', 'name');
+      let populateQuery: any = { path: `${role}Profile` };
+
+      if (role === 'parent') {
+        populateQuery = {
+          path: 'parentProfile',
+          populate: {
+            path: 'children',
+            populate: [
+              { path: 'studentProfile' },
+              { path: 'profileImage', match: { status: 'READY' }, select: 'url' }
+            ]
+          }
+        };
+      } else if (role === 'teacher') {
+        populateQuery = {
+          path: 'teacherProfile',
+          populate: [
+            {
+              path: 'certificates',
+              model: 'Attachment',
+              select: 'url key name size createdAt updatedAt mime',
+              match: { status: 'READY' }
+            },
+            {
+              path: 'highlights',
+              model: 'Attachment',
+              select: 'url key name size createdAt updatedAt mime',
+              match: { status: 'READY' }
+            },
+            {
+              path: 'intro',
+              model: 'Attachment',
+              select: 'url key name size createdAt updatedAt mime',
+              match: { status: 'READY' }
+            }
+          ]
+        };
+      }
+
+      const user: any = await User.findById(userId)
+        .populate({
+          path: 'profileImage',
+          match: { status: 'READY', entityType: 'User' },
+          select: 'url'
+        })
+        .populate(populateQuery)
+        .lean({ virtuals: true });
 
       if (!user) {
         throw new Error('User not found');
@@ -692,13 +743,228 @@ export const authService = {
         email: user.email!,
         name: user.name,
         role: user.role,
+        phone: user.phone,
         isVerified: user.isVerified,
         children: user.role === 'parent' ? user.children : undefined,
-        profile: user.profile,
-        schoolName: user.profile?.schoolName
+        profile: user[`${role}Profile`],
+        schoolName: user[`${role}Profile`]?.schoolName,
+        profileImage: user?.profileImage
       };
     } catch (error) {
       Logger.error('Get current user failed:', error);
+      throw error;
+    }
+  },
+
+  updateCurrentUser: async (userId: string, body: any): Promise<any> => {
+    try {
+      const allowedUserFields = ['name', 'email', 'phone'];
+      const userUpdateFields: Record<string, any> = {};
+
+      for (const key of allowedUserFields) {
+        if (body[key] !== undefined) userUpdateFields[key] = body[key];
+      }
+
+      if (userUpdateFields.email) {
+        const currentUser = await User.findById(userId);
+        if (!currentUser) throw new Error('User not found');
+
+        if (currentUser.email !== userUpdateFields.email) {
+          const emailExists = await User.findOne({
+            email: userUpdateFields.email,
+            _id: { $ne: userId } // Exclude current user
+          });
+
+          if (emailExists) {
+            throw new Error('Email is already taken! Please try another email.');
+          }
+        }
+      }
+
+      let updateUser;
+      if (Object.keys(userUpdateFields).length > 0) {
+        updateUser = await User.findByIdAndUpdate(
+          userId,
+          { $set: userUpdateFields },
+          { new: true }
+        );
+      } else {
+        updateUser = await User.findById(userId);
+      }
+      if (!updateUser) throw new Error('User not found');
+
+      const profileModels: any = {
+        student: StudentProfileModel,
+        parent: ParentProfileModel,
+        teacher: TeacherProfileModel,
+        school: SchoolProfileModel
+      };
+      const role = body.role || updateUser.role;
+      const Model = profileModels[role];
+
+      if (Model && body.profile) {
+        await Model.findOneAndUpdate(
+          { user: userId },
+          { $set: body.profile },
+          { new: true, runValidators: true, omitUndefined: true }
+        );
+      }
+
+      let populateQuery: any = { path: `${role}Profile` };
+      if (role === 'parent') {
+        populateQuery = {
+          path: 'parentProfile',
+          populate: {
+            path: 'children',
+            populate: { path: 'studentProfile' }
+          }
+        };
+      } else if (role === 'teacher') {
+        populateQuery = {
+          path: 'teacherProfile',
+          populate: [
+            {
+              path: 'certificates',
+              model: 'Attachment',
+              select: 'url key name size createdAt updatedAt mime',
+              match: { status: 'READY' }
+            },
+            {
+              path: 'highlights',
+              model: 'Attachment',
+              select: 'url key name size createdAt updatedAt mime isIntro',
+              match: { status: 'READY' }
+            },
+            {
+              path: 'intro',
+              model: 'Attachment',
+              select: 'url key name size createdAt updatedAt mime',
+              match: { status: 'READY' }
+            }
+          ]
+        };
+      }
+
+      const user: any = await User.findById(userId)
+        .populate({
+          path: 'profileImage',
+          match: { status: 'READY', entityType: 'User' },
+          select: 'url'
+        })
+        .populate(populateQuery)
+        .select('-password')
+        .lean({ virtuals: true });
+
+      if (!user) throw new Error('User not found');
+
+      return {
+        id: user._id.toString(),
+        email: user.email!,
+        name: user.name,
+        role: user.role,
+        phone: user.phone,
+        isVerified: user.isVerified,
+        children: user.role === 'parent' ? user.children : undefined,
+        profile: user[`${role}Profile`],
+        schoolName: user[`${role}Profile`]?.schoolName,
+        profileImage: user?.profileImage
+      };
+    } catch (error) {
+      Logger.error('Update current user failed:', error);
+      throw error;
+    }
+  },
+
+  deleteChildren: async (userId: string, childrenId: string) => {
+    try {
+      const parentProfile = await ParentProfileModel.findOne({ user: userId }).lean();
+      if (!parentProfile) throw new Error('Parent not found');
+
+      const isChildLinked = parentProfile.children.some(c => c.toString() === childrenId);
+      if (!isChildLinked) throw new Error('Child not found');
+
+      await StudentProfileModel.findOneAndDelete({ user: childrenId });
+
+      await AttachmentModel.updateMany({ uploadedBy: childrenId }, { $set: { status: 'DELETED' } });
+
+      await User.findByIdAndDelete(childrenId);
+
+      await ParentProfileModel.findOneAndUpdate(
+        { user: userId },
+        { $pull: { children: childrenId } },
+        { new: true }
+      );
+
+      Logger.info('Children deleted successfully', { userId, childrenId });
+    } catch (error) {
+      Logger.error('Delete children failed:', error);
+      throw error;
+    }
+  },
+
+  addStudentToParent: async (userId: string, studentData: any) => {
+    try {
+      const parent = await User.findById(userId).populate('parentProfile').lean();
+      if (!parent) throw new Error('Parent not found');
+
+      if (parent.role !== 'parent') {
+        throw new Error('Parent must be a parent');
+      }
+
+      if (studentData?.email) {
+        const checkIfExists = await User.findOne({
+          email: studentData?.email
+        })
+          .select('-password')
+          .lean();
+        if (checkIfExists) {
+          throw new Error('A user with this email already exists');
+        }
+      }
+
+      const studentUser = await User.create({
+        name: studentData.name,
+        email: studentData.email,
+        role: 'student',
+        phone: studentData.phone,
+        isVerified: true,
+        parent: parent._id
+      });
+
+      const studentProfile = new StudentProfileModel({
+        user: studentUser._id,
+        address: studentData?.profile?.address,
+        age: studentData?.profile?.age,
+        gender: studentData?.profile?.gender,
+        languages: studentData?.profile?.languages
+      });
+
+      await studentProfile.save();
+
+      await ParentProfileModel.findOneAndUpdate(
+        { user: userId },
+        { $push: { children: studentUser._id } },
+        { new: true }
+      );
+
+      const updatedParent = await User.findById(userId)
+        .populate({
+          path: 'parentProfile',
+          populate: {
+            path: 'children',
+            populate: [
+              { path: 'studentProfile' },
+              { path: 'profileImage', match: { status: 'READY' }, select: 'url' }
+            ]
+          }
+        })
+        .populate('profileImage')
+        .lean({ virtuals: true });
+
+      Logger.info('Student added successfully', { userId, studentId: studentUser._id });
+      return updatedParent;
+    } catch (error) {
+      Logger.error('Add student to parent failed:', error);
       throw error;
     }
   },

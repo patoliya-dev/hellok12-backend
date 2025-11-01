@@ -28,7 +28,6 @@ export const authenticate = async (
 
     const secret = JWT_SECRET || 'secret';
     const decoded = jwt.verify(token, secret) as UserPayload;
-
     // Verify user exists in database
     const user = await User.findById(decoded.id).select('-password');
 

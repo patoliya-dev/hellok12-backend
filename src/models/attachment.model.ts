@@ -15,7 +15,7 @@ const AttachmentSchema = new Schema(
     isPublic: { type: Boolean, default: true },
     uploadedBy: { type: String, required: true },
     entityType: { type: String, default: null },
-    entityId: { type: String, default: null },
+    entityId: { type: Schema.Types.ObjectId, default: null, refPath: 'entityType' },
     status: { type: String, enum: ['UPLOADING', 'READY', 'DELETED'], default: 'UPLOADING' },
     width: { type: Number, default: null },
     height: { type: Number, default: null }

@@ -43,7 +43,8 @@ const TeacherProfileSchema = new Schema(
     dateOfBirth: { type: Date },
     yearsOfExperience: { type: Number, default: 0 },
     travelRadius: { type: Number, default: 0 },
-    highlights: [{ type: Schema.Types.ObjectId, ref: 'Attachment' }]
+    highlights: [{ type: Schema.Types.ObjectId, ref: 'Attachment' }],
+    intro: { type: Schema.Types.ObjectId, ref: 'Attachment' }
   },
   { timestamps: true }
 );

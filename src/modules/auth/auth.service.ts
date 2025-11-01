@@ -706,13 +706,19 @@ export const authService = {
             {
               path: 'certificates',
               model: 'Attachment',
-              select: 'url key name size',
+              select: 'url key name size createdAt updatedAt mime',
               match: { status: 'READY' }
             },
             {
               path: 'highlights',
               model: 'Attachment',
-              select: 'url key name size createdAt mime',
+              select: 'url key name size createdAt updatedAt mime',
+              match: { status: 'READY' }
+            },
+            {
+              path: 'intro',
+              model: 'Attachment',
+              select: 'url key name size createdAt updatedAt mime',
               match: { status: 'READY' }
             }
           ]
@@ -757,6 +763,22 @@ export const authService = {
 
       for (const key of allowedUserFields) {
         if (body[key] !== undefined) userUpdateFields[key] = body[key];
+      }
+
+      if (userUpdateFields.email) {
+        const currentUser = await User.findById(userId);
+        if (!currentUser) throw new Error('User not found');
+
+        if (currentUser.email !== userUpdateFields.email) {
+          const emailExists = await User.findOne({
+            email: userUpdateFields.email,
+            _id: { $ne: userId } // Exclude current user
+          });
+
+          if (emailExists) {
+            throw new Error('Email is already taken! Please try another email.');
+          }
+        }
       }
 
       let updateUser;
@@ -804,13 +826,19 @@ export const authService = {
             {
               path: 'certificates',
               model: 'Attachment',
-              select: 'url key name size',
+              select: 'url key name size createdAt updatedAt mime',
               match: { status: 'READY' }
             },
             {
               path: 'highlights',
               model: 'Attachment',
-              select: 'url key name size createdAt mime',
+              select: 'url key name size createdAt updatedAt mime isIntro',
+              match: { status: 'READY' }
+            },
+            {
+              path: 'intro',
+              model: 'Attachment',
+              select: 'url key name size createdAt updatedAt mime',
               match: { status: 'READY' }
             }
           ]

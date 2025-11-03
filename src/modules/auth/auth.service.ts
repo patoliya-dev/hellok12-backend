@@ -1005,6 +1005,29 @@ export const authService = {
     }
   },
 
+  changePassword: async (
+    userId: string,
+    oldPassword: string,
+    newPassword: string
+  ): Promise<void> => {
+    try {
+      const user = await User.findById(userId);
+      if (!user) throw new Error('User not found');
+
+      const isPasswordValid = await user.comparePassword(oldPassword);
+      if (!isPasswordValid) {
+        throw new Error('Invalid current password');
+      }
+      user.password = newPassword;
+      await user.save();
+
+      Logger.info('Password changed successfully', { userId });
+    } catch (error) {
+      Logger.error('Change password failed:', error);
+      throw error;
+    }
+  },
+
   // Logout
   logout: async (userId: string): Promise<void> => {
     try {

@@ -31,5 +31,6 @@ router.get('/me', authenticate, authController.getCurrentUser);
 router.patch('/updateProfile/:userId', authenticate, authController.updateCurrentUser);
 router.delete('/deleteChildren/:childrenId', authenticate, authController.deleteChildren);
 router.post('/addStudentToParent', authenticate, authController.addStudentToParent);
+router.patch('/changePassword', authenticate, authController.changePassword);
 
 export default router;

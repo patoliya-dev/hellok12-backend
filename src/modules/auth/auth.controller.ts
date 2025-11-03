@@ -271,5 +271,27 @@ export const authController = {
         error: err.message
       });
     }
+  },
+
+  changePassword: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { currentPassword, newPassword } = req.body;
+      const user = await authService.changePassword(
+        req.user?.id as string,
+        currentPassword,
+        newPassword
+      );
+      return res.json({
+        success: true,
+        message: 'Password changed successfully',
+        data: user
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        message: 'Server error',
+        error: err.message
+      });
+    }
   }
 };

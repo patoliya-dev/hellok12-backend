@@ -8,7 +8,7 @@ export const presignSchema = z.object({
     'image/webp',
     'application/pdf',
     'video/mp4',
-    'video/mov'
+    'video/quicktime'
   ]),
   size: z
     .number()

@@ -17,7 +17,7 @@ const ALLOWED_MIME = new Set([
   'image/webp',
   'application/pdf',
   'video/mp4',
-  'video/mov'
+  'video/quicktime'
 ]); // tweak as needed
 
 /**

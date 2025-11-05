@@ -1,8 +1,9 @@
 import { Router } from 'express';
-import authRoutes from './auth.routes';
+import authRoutes from '../modules/auth/auth.routes';
 import courseRoutes from '../modules/courses/course.routes';
 import lessonRoutes from '../modules/lessons/lesson.routes';
 import attachmentRoutes from '../modules/attachments/attachment.routes';
+import teacherSchedules from '../modules/teacherSchedule/schedule.routes';
 // Future imports:
 // import userRoutes from './user.routes';
 // import schoolRoutes from './school.routes';
@@ -16,6 +17,7 @@ router.use('/auth', authRoutes);
 router.use('/courses', courseRoutes);
 router.use('/lessons', lessonRoutes);
 router.use('/attachments', attachmentRoutes);
+router.use('/teachers', teacherSchedules);
 
 // Future routes:
 // router.use('/users', userRoutes);

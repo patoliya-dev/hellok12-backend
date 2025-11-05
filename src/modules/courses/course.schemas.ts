@@ -12,7 +12,7 @@ export const courseCreateSchema = z.object({
   currency: z.string().default('USD'),
   ageGroups: z.array(z.enum(AGE_GROUPS as unknown as [string, ...string[]])).min(1),
   startDate: z.coerce.date(),
-  endDate: z.coerce.date().optional(),
+  endDate: z.coerce.date().nullable().optional(),
   introImageRef: z.string().optional(),
   status: z.enum(['draft', 'active', 'archived']).default('draft')
 });
@@ -31,7 +31,7 @@ export const courseUpdateSchema = z
     currency: z.string().optional(),
     ageGroups: z.array(z.enum(AGE_GROUPS as unknown as [string, ...string[]])).optional(),
     startDate: z.coerce.date().optional(),
-    endDate: z.coerce.date().optional(),
+    endDate: z.coerce.date().nullable().optional(),
     introImageRef: z.string().optional(),
     status: z.enum(['draft', 'active', 'archived']).optional()
   })

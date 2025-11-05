@@ -1,14 +1,14 @@
 import express from 'express';
-import { authController } from '../modules/auth/auth.controller';
-import { authenticate } from '../middlewares/auth';
-import { validateRequest } from '../middlewares/validation';
+import { authController } from '../../modules/auth/auth.controller';
+import { authenticate } from '../../middlewares/auth';
+import { validateRequest } from '../../middlewares/validation';
 import {
   studentRegistrationSchema,
   loginSchema,
   forgotPasswordSchema,
   verifyResetCodeSchema,
   resetPasswordSchema
-} from '../modules/auth/auth.schemas';
+} from './auth.schemas';
 
 const router = express.Router();
 

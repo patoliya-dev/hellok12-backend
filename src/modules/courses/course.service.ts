@@ -17,7 +17,7 @@ export const CourseService = {
       ageGroups: data.ageGroups,
       startDate: data.startDate,
       endDate: data.endDate ?? null,
-
+      teachers: data.teachers ?? [],
       // cast if present
       introImageRef: data.introImageRef ? new Types.ObjectId(data.introImageRef) : null,
 

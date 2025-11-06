@@ -49,7 +49,17 @@ const TeacherProfileSchema = new Schema(
   { timestamps: true }
 );
 
+TeacherProfileSchema.index({ yearsOfExperience: 1, teachingMode: 1 });
+TeacherProfileSchema.index({ teachingLanguages: 1 });
 TeacherProfileSchema.index({ user: 1 }, { unique: true });
+
+TeacherProfileSchema.virtual('profileImage', {
+  ref: 'Attachment',
+  localField: 'user',
+  foreignField: 'entityId',
+  match: { entityType: 'User', status: 'READY' },
+  select: 'url'
+});
 
 export type TeacherProfileDoc = InferSchemaType<typeof TeacherProfileSchema> & { _id: string };
 export const TeacherProfileModel = mongoose.model('TeacherProfile', TeacherProfileSchema);

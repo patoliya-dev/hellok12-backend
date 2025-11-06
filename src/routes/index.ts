@@ -3,6 +3,7 @@ import authRoutes from './auth.routes';
 import courseRoutes from '../modules/courses/course.routes';
 import lessonRoutes from '../modules/lessons/lesson.routes';
 import attachmentRoutes from '../modules/attachments/attachment.routes';
+import findTeacherRoutes from '../modules/find-teacher/findTeacher.routes';
 // Future imports:
 // import userRoutes from './user.routes';
 // import schoolRoutes from './school.routes';
@@ -16,6 +17,7 @@ router.use('/auth', authRoutes);
 router.use('/courses', courseRoutes);
 router.use('/lessons', lessonRoutes);
 router.use('/attachments', attachmentRoutes);
+router.use('/find-teacher', findTeacherRoutes);
 
 // Future routes:
 // router.use('/users', userRoutes);

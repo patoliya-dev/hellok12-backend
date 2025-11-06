@@ -53,7 +53,7 @@ export const updateCourse = async (req: Request, res: Response) => {
 
     return res.status(200).json(createSuccessResponse(updated, 'Course updated successfully', 200));
   } catch (error) {
-    console.log('error', error);
+    return res.status(500).json(createErrorResponse('Internal Server Error', 'Error', 500));
   }
 };
 

@@ -296,6 +296,7 @@ UserSchema.index({ email: 1 });
 UserSchema.index({ role: 1, status: 1 });
 UserSchema.index({ parent: 1 });
 UserSchema.index({ school: 1 });
+UserSchema.index({ role: 1, school: 1 });
 UserSchema.index({ createdAt: -1 });
 UserSchema.index({ lastLogin: -1 });
 

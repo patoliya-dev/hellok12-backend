@@ -25,7 +25,7 @@ export interface CourseDoc extends Document {
 
   // simple denormalized counters for UI
   enrolledCount?: number;
-
+  teachers?: Types.ObjectId[];
   // timestamps
   createdAt: Date;
   updatedAt: Date;
@@ -54,7 +54,8 @@ const CourseSchema = new Schema<CourseDoc>(
     status: { type: String, enum: ['draft', 'active', 'archived'], default: 'draft', index: true },
     isTrialAvailable: { type: Boolean, default: false, index: true },
 
-    enrolledCount: { type: Number, default: 0 }
+    enrolledCount: { type: Number, default: 0 },
+    teachers: [{ type: Schema.Types.ObjectId, ref: 'User' }]
   },
   { timestamps: true }
 );

@@ -1,21 +1,27 @@
 import { z } from 'zod';
 import { COURSE_MODE, LESSON_TYPES, AGE_GROUPS } from '../../utils/constants';
 
-export const courseCreateSchema = z.object({
-  title: z.string().min(2).max(160),
-  description: z.string().max(4000).optional(),
-  language: z.string().min(2).max(10),
-  lessonType: z.enum([LESSON_TYPES.ONE_ON_ONE, LESSON_TYPES.GROUP]),
-  studentCapacity: z.coerce.number().int().min(1),
-  mode: z.enum([COURSE_MODE.ONLINE, COURSE_MODE.IN_PERSON]),
-  price: z.coerce.number().min(0),
-  currency: z.string().default('USD'),
-  ageGroups: z.array(z.enum(AGE_GROUPS as unknown as [string, ...string[]])).min(1),
-  startDate: z.coerce.date(),
-  endDate: z.coerce.date().nullable().optional(),
-  introImageRef: z.string().optional(),
-  status: z.enum(['draft', 'active', 'archived']).default('draft')
-});
+export const courseCreateSchema = z
+  .object({
+    title: z.string().min(2).max(160),
+    description: z.string().max(4000).optional(),
+    language: z.string().min(2).max(10),
+    lessonType: z.enum([LESSON_TYPES.ONE_ON_ONE, LESSON_TYPES.GROUP]),
+    studentCapacity: z.coerce.number().int().min(1),
+    mode: z.enum([COURSE_MODE.ONLINE, COURSE_MODE.IN_PERSON]),
+    price: z.coerce.number().min(0),
+    currency: z.string().default('USD'),
+    ageGroups: z.array(z.enum(AGE_GROUPS as unknown as [string, ...string[]])).min(1),
+    startDate: z.coerce.date(),
+    endDate: z.coerce.date().nullable().optional(),
+    introImageRef: z.string().optional(),
+    status: z.enum(['draft', 'active', 'archived']).default('draft'),
+    teachers: z.array(z.string()).optional()
+  })
+  .refine(
+    data => !data.endDate || (data.startDate && data.endDate && data.endDate >= data.startDate),
+    { message: 'endDate must be greater than or equal to startDate', path: ['endDate'] }
+  );
 
 export type CourseCreateDTO = z.infer<typeof courseCreateSchema>;
 
@@ -33,7 +39,8 @@ export const courseUpdateSchema = z
     startDate: z.coerce.date().optional(),
     endDate: z.coerce.date().nullable().optional(),
     introImageRef: z.string().optional(),
-    status: z.enum(['draft', 'active', 'archived']).optional()
+    status: z.enum(['draft', 'active', 'archived']).optional(),
+    teachers: z.array(z.string()).optional()
   })
   .partial()
   .refine(

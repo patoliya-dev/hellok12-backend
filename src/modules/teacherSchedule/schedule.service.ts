@@ -6,7 +6,8 @@ import {
   normalizeTimes,
   toMinutes,
   toHHMM,
-  weekdayFromISO
+  weekdayFromISO,
+  mapToPlain
 } from './schedule.util';
 
 type Lean<T> = Omit<T, keyof Document> & { _id: Types.ObjectId };
@@ -77,21 +78,17 @@ export class ScheduleService {
       throw e;
     }
 
-    const slot = sched.slotMinutes ?? 60;
-    // Check overrides first
-    const override = (sched.overrides as unknown as Record<string, number[]>)[dateISO];
+    // normalize overrides (Map → plain object) before indexing
+    const overridesObj = mapToPlain<number[]>(sched.overrides);
+    const override = overridesObj[dateISO];
+
     if (override && override.length) {
       return { slots: normalizeMinutes(override).map(toHHMM) };
     }
 
-    // Else derive from weekly
+    // weekly fallback
     const w = weekdayFromISO(dateISO) as 0 | 1 | 2 | 3 | 4 | 5 | 6;
     const mins = (sched.weekly && (sched.weekly as any)[w]) || [];
-    // Just in case, align & sort
-    const alignedErr = ensureAligned(mins.map(toHHMM), slot);
-    if (alignedErr) {
-      // data corruption guard; we won’t 422 here, just return cleaned list
-    }
     return { slots: normalizeMinutes(mins).map(toHHMM) };
   }
 
@@ -107,7 +104,6 @@ export class ScheduleService {
     const remove = normalizeTimes(body.remove || []);
     const toggle = normalizeTimes(body.toggle || []);
 
-    // Validate alignment for all provided times
     for (const arr of [add, remove, toggle]) {
       const err = ensureAligned(arr, slot);
       if (err) {
@@ -118,7 +114,7 @@ export class ScheduleService {
       }
     }
 
-    // Ensure doc exists if we’re mutating
+    // Ensure doc exists if mutating
     const doc =
       sched ||
       (await TeacherSchedule.create({
@@ -128,28 +124,29 @@ export class ScheduleService {
         overrides: {}
       }));
 
-    const overrides = (doc.overrides as unknown as Record<string, number[]>) || {};
-    const current = overrides[body.date] || [];
+    // Map-safe read/update
+    const existingOverrides = mapToPlain<number[]>(doc.overrides);
+    const current = existingOverrides[body.date] || [];
     const set = new Set(current);
 
-    // apply add/remove/toggle in minutes
     add.map(toMinutes).forEach(m => set.add(m));
     remove.map(toMinutes).forEach(m => set.delete(m));
     toggle.map(toMinutes).forEach(m => (set.has(m) ? set.delete(m) : set.add(m)));
 
-    overrides[body.date] = Array.from(set).sort((a, b) => a - b);
+    existingOverrides[body.date] = Array.from(set).sort((a, b) => a - b);
 
     const updated = await TeacherSchedule.findOneAndUpdate(
       { teacherId },
-      { $set: { overrides } },
-      { new: true, upsert: true }
-    ).lean<ScheduleLean>();
+      // write plain object; Mongoose will cast back to Map<date, number[]>
+      { $set: { overrides: existingOverrides } },
+      { new: true, upsert: true, lean: true }
+    );
 
+    // Map-safe read (even if lean returns Map on some drivers)
+    const updatedOverrides = mapToPlain<number[]>(updated?.overrides);
     return {
       date: body.date,
-      slots: normalizeMinutes(
-        (updated!.overrides as unknown as Record<string, number[]>)[body.date] || []
-      ).map(toHHMM)
+      slots: normalizeMinutes(updatedOverrides[body.date] || []).map(toHHMM)
     };
   }
 

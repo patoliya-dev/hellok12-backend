@@ -28,3 +28,10 @@ export function weekdayFromISO(date: string): number {
   const d = new Date(date + 'T00:00:00.000Z');
   return d.getUTCDay();
 }
+
+// Normalizes a Mongoose Map<string, number[]> or plain object into a plain object
+export function mapToPlain<T = number[]>(input: any): Record<string, T> {
+  if (!input) return {};
+  if (input instanceof Map) return Object.fromEntries(input as Map<string, T>);
+  return input as Record<string, T>;
+}

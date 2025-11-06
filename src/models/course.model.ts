@@ -25,7 +25,7 @@ export interface CourseDoc extends Document {
 
   // simple denormalized counters for UI
   enrolledCount?: number;
-  teachers?: string[];
+  teachers?: Types.ObjectId[];
   // timestamps
   createdAt: Date;
   updatedAt: Date;

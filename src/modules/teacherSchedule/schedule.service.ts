@@ -88,18 +88,49 @@ export class ScheduleService {
     // Auto-create on first visit
     const sched = await this.getOrCreate(teacherId);
 
-    // normalize overrides (Map → plain object) before indexing
     const overridesObj = mapToPlain<number[]>(sched.overrides);
-    const override = overridesObj[dateISO];
 
-    if (override && override.length) {
+    // Distinguish between “no entry” and “empty array”
+    if (Object.prototype.hasOwnProperty.call(overridesObj, dateISO)) {
+      const override = overridesObj[dateISO] || [];
+      // Return exactly what's stored, even if empty
       return { slots: normalizeMinutes(override).map(toHHMM) };
     }
 
-    // weekly fallback
+    // Fallback to weekly if no override entry
     const w = weekdayFromISO(dateISO) as 0 | 1 | 2 | 3 | 4 | 5 | 6;
     const mins = (sched.weekly && (sched.weekly as any)[w]) || [];
     return { slots: normalizeMinutes(mins).map(toHHMM) };
+  }
+
+  // ---------------- helpers ----------------
+
+  /** Return the weekly baseline (minutes[]) for a given ISO date (YYYY-MM-DD). */
+  private static weeklyBaselineForDate(
+    sched: ScheduleLean | TeacherScheduleDoc,
+    dateISO: string
+  ): number[] {
+    const w = weekdayFromISO(dateISO) as 0 | 1 | 2 | 3 | 4 | 5 | 6;
+    const weeklyAny = (sched.weekly as any) || {};
+    const list: number[] = Array.isArray(weeklyAny[w]) ? weeklyAny[w] : [];
+    return normalizeMinutes(list);
+  }
+
+  /** Convert an HH:MM[] list to minutes[], aligned/validated against the slot size. */
+  private static validateAndToMinutes(
+    times: string[],
+    slotMinutes: number,
+    field: string
+  ): number[] {
+    const normTimes = normalizeTimes(times || []);
+    const err = ensureAligned(normTimes, slotMinutes);
+    if (err) {
+      const e = new Error(err);
+      (e as any).code = '422_VALIDATION';
+      (e as any).fields = [{ path: field, message: err }];
+      throw e;
+    }
+    return normTimes.map(toMinutes);
   }
 
   /** Add/remove/toggle slots for one date override (strings HH:MM) */
@@ -107,56 +138,77 @@ export class ScheduleService {
     teacherId: Types.ObjectId,
     body: { date: string; add?: string[]; remove?: string[]; toggle?: string[] }
   ): Promise<{ date: string; slots: string[] }> {
-    const sched = await TeacherSchedule.findOne({ teacherId });
-    const slot = sched?.slotMinutes ?? 60;
-
-    const add = normalizeTimes(body.add || []);
-    const remove = normalizeTimes(body.remove || []);
-    const toggle = normalizeTimes(body.toggle || []);
-
-    for (const arr of [add, remove, toggle]) {
-      const err = ensureAligned(arr, slot);
-      if (err) {
-        const e = new Error(err);
-        (e as any).code = '422_VALIDATION';
-        (e as any).fields = [{ path: 'body', message: err }];
-        throw e;
-      }
-    }
-
-    // Ensure doc exists if mutating
-    const doc =
-      sched ||
-      (await TeacherSchedule.create({
+    let sched = await TeacherSchedule.findOne({ teacherId });
+    if (!sched) {
+      sched = await TeacherSchedule.create({
         teacherId,
-        slotMinutes: slot,
+        slotMinutes: 60,
         weekly: {},
         overrides: {}
-      }));
+      });
+    }
 
-    // Map-safe read/update
-    const existingOverrides = mapToPlain<number[]>(doc.overrides);
-    const current = existingOverrides[body.date] || [];
-    const set = new Set(current);
+    const slot = sched.slotMinutes ?? 60;
 
-    add.map(toMinutes).forEach(m => set.add(m));
-    remove.map(toMinutes).forEach(m => set.delete(m));
-    toggle.map(toMinutes).forEach(m => (set.has(m) ? set.delete(m) : set.add(m)));
+    // Validate inputs and convert to minutes
+    const addMins = body.add ? this.validateAndToMinutes(body.add, slot, 'body.add') : [];
+    const removeMins = body.remove
+      ? this.validateAndToMinutes(body.remove, slot, 'body.remove')
+      : [];
+    const toggleMins = body.toggle
+      ? this.validateAndToMinutes(body.toggle, slot, 'body.toggle')
+      : [];
 
-    existingOverrides[body.date] = Array.from(set).sort((a, b) => a - b);
+    // Normalize overrides map to a plain object for safe read/write.
+    const overridesObj = mapToPlain<number[]>(sched.overrides);
+    const hasExistingOverride = Object.prototype.hasOwnProperty.call(overridesObj, body.date);
+    const currentOverride = hasExistingOverride ? overridesObj[body.date] || [] : null;
 
+    // Determine the starting point for edits:
+    //  If an override exists -> start from that.
+    //  Else -> start from weekly baseline (prevents accidental loss of weekly on first change).
+    const baseline = this.weeklyBaselineForDate(sched as any, body.date);
+    const startMinutes = hasExistingOverride ? currentOverride : baseline;
+
+    // Apply operations
+    const set = new Set<number>(startMinutes);
+    addMins.forEach(m => set.add(m));
+    removeMins.forEach(m => set.delete(m));
+    toggleMins.forEach(m => (set.has(m) ? set.delete(m) : set.add(m)));
+
+    // Build the next value
+    const nextMinutes = normalizeMinutes(Array.from(set));
+
+    // If next == baseline -> remove override (clean up).
+    // Else -> persist override for that date.
+    const baselineStr = JSON.stringify(baseline);
+    const nextStr = JSON.stringify(nextMinutes);
+
+    if (nextStr === baselineStr) {
+      if (hasExistingOverride) {
+        delete overridesObj[body.date];
+      }
+    } else {
+      overridesObj[body.date] = nextMinutes;
+    }
+
+    // Persist the overrides (write plain object; Mongoose casts back to Map)
     const updated = await TeacherSchedule.findOneAndUpdate(
       { teacherId },
-      // write plain object; Mongoose will cast back to Map<date, number[]>
-      { $set: { overrides: existingOverrides } },
+      { $set: { overrides: overridesObj } },
       { new: true, upsert: true, lean: true }
     );
 
-    // Map-safe read (even if lean returns Map on some drivers)
+    // Compute effective slots for response:
+    //  If override exists after save -> return it.
+    //  Else -> return weekly baseline (so UI reflects "back to default").
     const updatedOverrides = mapToPlain<number[]>(updated?.overrides);
+    const hasOverrideAfter = Object.prototype.hasOwnProperty.call(updatedOverrides, body.date);
+    const effectiveMinutes = hasOverrideAfter ? updatedOverrides[body.date] || [] : baseline;
+
     return {
       date: body.date,
-      slots: normalizeMinutes(updatedOverrides[body.date] || []).map(toHHMM)
+      slots: normalizeMinutes(effectiveMinutes).map(toHHMM)
     };
   }
 

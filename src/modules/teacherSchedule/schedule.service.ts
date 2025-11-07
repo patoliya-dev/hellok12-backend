@@ -14,7 +14,21 @@ type Lean<T> = Omit<T, keyof Document> & { _id: Types.ObjectId };
 type ScheduleLean = Lean<TeacherScheduleDoc>;
 
 export class ScheduleService {
-  /** Fetch schedule or null (GET never auto-creates) */
+  /** Fetch schedule or auto create and fetch schedule */
+  static async getOrCreate(teacherId: Types.ObjectId): Promise<ScheduleLean> {
+    const found = await TeacherSchedule.findOne({ teacherId }).lean<ScheduleLean>();
+    if (found) return found;
+
+    const created = await TeacherSchedule.create({
+      teacherId,
+      slotMinutes: 60,
+      overrides: {}
+    });
+
+    return (await TeacherSchedule.findById(created._id).lean<ScheduleLean>())!;
+  }
+
+  /** Fetch schedule or null */
   static async get(teacherId: Types.ObjectId): Promise<ScheduleLean | null> {
     return TeacherSchedule.findOne({ teacherId }).lean<ScheduleLean>();
   }
@@ -71,12 +85,8 @@ export class ScheduleService {
     teacherId: Types.ObjectId,
     dateISO: string
   ): Promise<{ slots: string[] }> {
-    const sched = await this.get(teacherId);
-    if (!sched) {
-      const e = new Error('Schedule not found');
-      (e as any).code = '404_NOT_FOUND';
-      throw e;
-    }
+    // Auto-create on first visit
+    const sched = await this.getOrCreate(teacherId);
 
     // normalize overrides (Map → plain object) before indexing
     const overridesObj = mapToPlain<number[]>(sched.overrides);

@@ -7,10 +7,7 @@ import { ValidatedRequest } from '../../middlewares/validation';
 export const getSchedule = async (req: ValidatedRequest, res: Response) => {
   try {
     const teacherId = new Types.ObjectId(req.params.teacherId);
-    const data = await ScheduleService.get(teacherId);
-    if (!data) {
-      return res.status(404).json(createErrorResponse('Schedule not found', '404_NOT_FOUND', 404));
-    }
+    const data = await ScheduleService.getOrCreate(teacherId);
     return res.status(200).json(createSuccessResponse(data, 'Schedule fetched', 200));
   } catch (e: any) {
     return res

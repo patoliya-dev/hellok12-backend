@@ -1,6 +1,15 @@
+import { Types } from 'mongoose';
+
 export const findTeacherQuery = ({ filters, teacherQuery, offset, limit }: any) => {
   const pipeline: any[] = [];
-  const { query, priceRange } = teacherQuery;
+  const { priceRange } = teacherQuery;
+
+  pipeline.push({
+    $match: {
+      role: 'teacher',
+      ...(filters.school && { school: new Types.ObjectId(filters.school) })
+    }
+  });
 
   pipeline.push({
     $lookup: {
@@ -10,39 +19,56 @@ export const findTeacherQuery = ({ filters, teacherQuery, offset, limit }: any) 
       as: 'profile'
     }
   });
-  pipeline.push({ $unwind: { path: '$profile', preserveNullAndEmptyArrays: true } });
 
-  //   pipeline.push({
-  //     $lookup: {
-  //       from: 'teacherfeedbacks',
-  //       localField: '_id',
-  //       foreignField: 'teacher',
-  //       as: 'feedbacks'
-  //     }
-  //   });
+  pipeline.push({ $unwind: { path: '$profile' } });
 
-  //   pipeline.push({
-  //     $addFields: {
-  //       averageRating: {
-  //         $cond: [{ $gt: [{ $size: '$feedbacks' }, 0] }, { $avg: '$feedbacks.rating' }, null]
-  //       }
-  //     }
-  //   });
+  const profileMatchFilters: any = {};
 
-  //   if (filters.rating) {
-  //     pipeline.push({
-  //       $match: { averageRating: { $gte: Number(filters.ratings) } }
-  //     });
-  //   }
+  if (filters.languages) {
+    profileMatchFilters['profile.teachingLanguages'] = filters.languages;
+  }
 
-  pipeline.push({ $match: query });
+  if (filters.experience) {
+    const [min, max] = filters.experience.split('-').map(Number);
+    profileMatchFilters['profile.yearsOfExperience'] = { $gte: min, $lte: max };
+  }
+
+  if (filters.ageRange) {
+    profileMatchFilters['profile.ageGroupTeach'] = filters.ageRange;
+  }
+
+  if (profileMatchFilters && Object.keys(profileMatchFilters).length > 0) {
+    pipeline.push({ $match: profileMatchFilters });
+  }
+
+  if (filters.rating) {
+    pipeline.push({
+      $lookup: {
+        from: 'feedbackratings',
+        localField: '_id',
+        foreignField: 'teacher',
+        as: 'feedbacks'
+      }
+    });
+
+    pipeline.push({
+      $addFields: {
+        averageRating: {
+          $cond: [{ $gt: [{ $size: '$feedbacks' }, 0] }, { $avg: '$feedbacks.rating' }, null]
+        }
+      }
+    });
+    pipeline.push({
+      $match: { averageRating: { $gte: Number(filters.rating) } }
+    });
+  }
 
   if (priceRange) {
     const { min, max } = priceRange;
     pipeline.push({
       $lookup: {
         from: 'courses',
-        let: { teacherId: { $toObjectId: '$_id' } },
+        let: { teacherId: '$_id' },
         pipeline: [
           {
             $match: {
@@ -55,6 +81,7 @@ export const findTeacherQuery = ({ filters, teacherQuery, offset, limit }: any) 
               }
             }
           },
+          { $limit: 1 },
           { $project: { _id: 1, price: 1 } }
         ],
         as: 'courses'
@@ -80,7 +107,7 @@ export const findTeacherQuery = ({ filters, teacherQuery, offset, limit }: any) 
     }
   });
   pipeline.push({
-    $addFields: { profileImage: { $arrayElemAt: ['$profileImage', 0] } }
+    $addFields: { profileImage: { $arrayElemAt: ['$profileImage.url', 0] } }
   });
 
   pipeline.push({
@@ -93,12 +120,12 @@ export const findTeacherQuery = ({ filters, teacherQuery, offset, limit }: any) 
       'profile.teachingLanguages': 1,
       'profile.location': 1,
       'profile.teachingSpecialties': 1,
-      // '$ratings': 1,
+      averageRating: 1,
       'profile.yearsOfExperience': 1
     }
   });
-  pipeline.push({ $skip: offset });
-  pipeline.push({ $limit: limit });
+  if (offset) pipeline.push({ $skip: offset });
+  if (limit) pipeline.push({ $limit: limit });
 
   return pipeline;
 };

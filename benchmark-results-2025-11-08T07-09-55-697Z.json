@@ -1,0 +1,257 @@
+[
+  {
+    "scenario": "1️⃣  No filters (baseline)",
+    "params": {
+      "offset": "0",
+      "limit": "8"
+    },
+    "resultsCount": 8,
+    "executionTime": 32,
+    "statusCode": 200,
+    "success": true
+  },
+  {
+    "scenario": "2️⃣  Single filter: Language",
+    "params": {
+      "languages": "en",
+      "offset": "0",
+      "limit": "8"
+    },
+    "resultsCount": 8,
+    "executionTime": 44,
+    "statusCode": 200,
+    "success": true
+  },
+  {
+    "scenario": "3️⃣  Single filter: Experience",
+    "params": {
+      "experience": "5-10",
+      "offset": "0",
+      "limit": "8"
+    },
+    "resultsCount": 8,
+    "executionTime": 50,
+    "statusCode": 200,
+    "success": true
+  },
+  {
+    "scenario": "4️⃣  Single filter: Age Group",
+    "params": {
+      "ageRange": "9-11",
+      "offset": "0",
+      "limit": "8"
+    },
+    "resultsCount": 8,
+    "executionTime": 42,
+    "statusCode": 200,
+    "success": true
+  },
+  {
+    "scenario": "5️⃣  Single filter: Price Range",
+    "params": {
+      "price": "[50,200]",
+      "offset": "0",
+      "limit": "8"
+    },
+    "resultsCount": 8,
+    "executionTime": 53,
+    "statusCode": 200,
+    "success": true
+  },
+  {
+    "scenario": "6️⃣  Single filter: Rating",
+    "params": {
+      "rating": "4",
+      "offset": "0",
+      "limit": "8"
+    },
+    "resultsCount": 4,
+    "executionTime": 116,
+    "statusCode": 200,
+    "success": true
+  },
+  {
+    "scenario": "7️⃣  Two filters: Language + Experience",
+    "params": {
+      "languages": "sp",
+      "experience": "3-7",
+      "offset": "0",
+      "limit": "8"
+    },
+    "resultsCount": 8,
+    "executionTime": 84,
+    "statusCode": 200,
+    "success": true
+  },
+  {
+    "scenario": "8️⃣  Two filters: Price + Rating",
+    "params": {
+      "price": "[100,300]",
+      "rating": "3",
+      "offset": "0",
+      "limit": "8"
+    },
+    "resultsCount": 8,
+    "executionTime": 61,
+    "statusCode": 200,
+    "success": true
+  },
+  {
+    "scenario": "9️⃣  Three filters: Language + Experience + Age",
+    "params": {
+      "languages": "en",
+      "experience": "5-15",
+      "ageRange": "12-14",
+      "offset": "0",
+      "limit": "8"
+    },
+    "resultsCount": 8,
+    "executionTime": 70,
+    "statusCode": 200,
+    "success": true
+  },
+  {
+    "scenario": "🔟 Four filters: Language + Experience + Price + Rating",
+    "params": {
+      "languages": "fr",
+      "experience": "2-10",
+      "price": "[50,250]",
+      "rating": "4",
+      "offset": "0",
+      "limit": "8"
+    },
+    "resultsCount": 0,
+    "executionTime": 121,
+    "statusCode": 200,
+    "success": true
+  },
+  {
+    "scenario": "1️⃣1️⃣  All filters combined",
+    "params": {
+      "languages": "en",
+      "experience": "5-15",
+      "ageRange": "9-11",
+      "price": "[100,300]",
+      "rating": "3",
+      "offset": "0",
+      "limit": "8"
+    },
+    "resultsCount": 6,
+    "executionTime": 137,
+    "statusCode": 200,
+    "success": true
+  },
+  {
+    "scenario": "1️⃣2️⃣  High pagination offset",
+    "params": {
+      "languages": "en",
+      "offset": "100",
+      "limit": "8"
+    },
+    "resultsCount": 8,
+    "executionTime": 244,
+    "statusCode": 200,
+    "success": true
+  },
+  {
+    "scenario": "1️⃣3️⃣  Large page size",
+    "params": {
+      "experience": "3-10",
+      "offset": "0",
+      "limit": "50"
+    },
+    "resultsCount": 50,
+    "executionTime": 146,
+    "statusCode": 200,
+    "success": true
+  },
+  {
+    "scenario": "1️⃣4️⃣  Price filter only (tests course lookup)",
+    "params": {
+      "price": "[20,100]",
+      "offset": "0",
+      "limit": "8"
+    },
+    "resultsCount": 8,
+    "executionTime": 43,
+    "statusCode": 200,
+    "success": true
+  },
+  {
+    "scenario": "1️⃣5️⃣  Expensive price range (fewer results)",
+    "params": {
+      "price": "[400,500]",
+      "offset": "0",
+      "limit": "8"
+    },
+    "resultsCount": 8,
+    "executionTime": 34,
+    "statusCode": 200,
+    "success": true
+  },
+  {
+    "scenario": "1️⃣6️⃣  Multiple languages",
+    "params": {
+      "languages": "en",
+      "rating": "3",
+      "offset": "0",
+      "limit": "20"
+    },
+    "resultsCount": 20,
+    "executionTime": 118,
+    "statusCode": 200,
+    "success": true
+  },
+  {
+    "scenario": "1️⃣7️⃣  Beginner experience range",
+    "params": {
+      "experience": "0-3",
+      "ageRange": "6-8",
+      "offset": "0",
+      "limit": "8"
+    },
+    "resultsCount": 8,
+    "executionTime": 67,
+    "statusCode": 200,
+    "success": true
+  },
+  {
+    "scenario": "1️⃣8️⃣  Expert experience range",
+    "params": {
+      "experience": "20-30",
+      "rating": "4",
+      "offset": "0",
+      "limit": "8"
+    },
+    "resultsCount": 0,
+    "executionTime": 137,
+    "statusCode": 200,
+    "success": true
+  },
+  {
+    "scenario": "1️⃣9️⃣  Mid-range pricing",
+    "params": {
+      "price": "[150,250]",
+      "experience": "5-10",
+      "offset": "0",
+      "limit": "8"
+    },
+    "resultsCount": 8,
+    "executionTime": 42,
+    "statusCode": 200,
+    "success": true
+  },
+  {
+    "scenario": "2️⃣0️⃣  Budget friendly",
+    "params": {
+      "price": "[10,50]",
+      "languages": "en",
+      "offset": "0",
+      "limit": "8"
+    },
+    "resultsCount": 8,
+    "executionTime": 41,
+    "statusCode": 200,
+    "success": true
+  }
+]

@@ -1,21 +1,21 @@
-import mongoose from 'mongoose';
-import { TeacherProfileModel } from '../../models/teacherProfile.model';
 import Logger from '../../utils/winstonLogger.utils';
-import { buildTeacherFilters } from './findTeacher.helper';
+import { buildTeacherQuery } from './findTeacher.helper';
 import { User } from '../../models/user.model';
 import { findTeacherQuery } from './findTeacher.queries';
 
 export const FindTeacherService = {
-  async list(
-    filters: any,
-    pagination: any
-  ): Promise<{ count: number; data: any[]; nextOffset: number }> {
+  async list(filters: any, pagination: any) {
     try {
       const { limit = 8, offset = 0 } = pagination;
 
-      const teacherQuery = buildTeacherFilters(filters);
+      const filtersQuery = buildTeacherQuery(filters);
 
-      const pipeline = findTeacherQuery({ filters, teacherQuery, offset, limit });
+      const pipeline = findTeacherQuery({
+        filters,
+        teacherQuery: filtersQuery,
+        offset,
+        limit
+      });
 
       const teachers = await User.aggregate(pipeline);
 

@@ -1,18 +1,25 @@
 import Logger from '../../utils/winstonLogger.utils';
-import { buildTeacherQuery } from './findTeacher.helper';
 import { User } from '../../models/user.model';
-import { findTeacherQuery } from './findTeacher.queries';
+import { findTeacherQuery, teacherDetailsQuery } from './findTeacher.queries';
+import { nodeModuleNameResolver } from 'typescript';
 
 export const FindTeacherService = {
   async list(filters: any, pagination: any) {
     try {
       const { limit = 8, offset = 0 } = pagination;
 
-      const filtersQuery = buildTeacherQuery(filters);
+      let priceRange = {};
+      if (filters.price && Array.isArray(filters.price)) {
+        const [minPrice, maxPrice] = filters.price.map(Number);
+        priceRange = {
+          min: minPrice && Number(minPrice),
+          max: maxPrice && Number(maxPrice)
+        };
+      }
 
       const pipeline = findTeacherQuery({
         filters,
-        teacherQuery: filtersQuery,
+        priceRange,
         offset,
         limit
       });
@@ -31,8 +38,18 @@ export const FindTeacherService = {
   },
 
   async get(teacherId: string) {
-    return {
-      teacherId
-    };
+    try {
+      const pipeline = teacherDetailsQuery({ teacherId });
+
+      const teacher = await User.aggregate(pipeline);
+
+      return {
+        teacherId,
+        ...teacher[0]
+      };
+    } catch (error) {
+      Logger.error('Error in FindTeacherService.get:', error);
+      throw error;
+    }
   }
 };

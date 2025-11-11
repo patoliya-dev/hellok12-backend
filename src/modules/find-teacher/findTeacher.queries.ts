@@ -473,7 +473,9 @@ export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
             language: 1,
             studentCapacity: 1,
             lessonType: 1,
-            location: 1
+            location: 1,
+            isTrialAvailable: 1,
+            mode: 1
             // Add other fields you need
           }
         }

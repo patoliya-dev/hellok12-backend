@@ -48,5 +48,6 @@ r.post(
   authorize([USER_ROLES.SCHOOL, USER_ROLES.TEACHER]),
   lessonCtrl.reorderLessons
 );
+r.get('/getCourseDetails/:id', courseCtrl.courseDetails);
 
 export default r;

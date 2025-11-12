@@ -112,3 +112,18 @@ export const listCourses = async (req: Request, res: Response) => {
   const result = await CourseService.list({ ...parsed.data, owner });
   return res.json(createSuccessResponse(result));
 };
+
+export const courseDetails = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    if (!id) return createErrorResponse('Invalid request', 'Invalid request', 400);
+
+    const data = await CourseService.getCourseDetails(req.params.id);
+
+    if (!data) return createErrorResponse('Course not found', 'Not found', 404);
+
+    return res.json(createSuccessResponse(data));
+  } catch (error: any) {
+    return res.status(500).json(createErrorResponse(error.message, 'Error', 500));
+  }
+};

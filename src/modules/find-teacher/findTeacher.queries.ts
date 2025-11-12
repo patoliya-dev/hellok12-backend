@@ -3,6 +3,7 @@ import { Types } from 'mongoose';
 export const findTeacherQuery = ({ filters, priceRange, offset, limit }: any) => {
   const pipeline: any[] = [];
 
+  // Match role and school
   pipeline.push({
     $match: {
       role: 'teacher',
@@ -10,6 +11,7 @@ export const findTeacherQuery = ({ filters, priceRange, offset, limit }: any) =>
     }
   });
 
+  // Match name
   if (filters.name) {
     pipeline.push({
       $match: {
@@ -18,6 +20,7 @@ export const findTeacherQuery = ({ filters, priceRange, offset, limit }: any) =>
     });
   }
 
+  // Lookup profile
   pipeline.push({
     $lookup: {
       from: 'teacherprofiles',
@@ -27,27 +30,33 @@ export const findTeacherQuery = ({ filters, priceRange, offset, limit }: any) =>
     }
   });
 
+  // Unwind profile
   pipeline.push({ $unwind: { path: '$profile' } });
 
   const profileMatchFilters: any = {};
 
+  // Match languages
   if (filters.languages) {
     profileMatchFilters['profile.teachingLanguages'] = filters.languages;
   }
 
+  // Match experience
   if (filters.experience) {
     const [min, max] = filters.experience.split('-').map(Number);
     profileMatchFilters['profile.yearsOfExperience'] = { $gte: min, $lte: max };
   }
 
+  // Match ageRange
   if (filters.ageRange) {
     profileMatchFilters['profile.ageGroupTeach'] = { $in: [filters.ageRange] };
   }
 
+  // Match rating
   if (profileMatchFilters && Object.keys(profileMatchFilters).length > 0) {
     pipeline.push({ $match: profileMatchFilters });
   }
 
+  // Lookup feedbacks
   pipeline.push({
     $lookup: {
       from: 'feedbackratings',
@@ -57,6 +66,7 @@ export const findTeacherQuery = ({ filters, priceRange, offset, limit }: any) =>
     }
   });
 
+  // Add averageRating and reviewsCount
   pipeline.push({
     $addFields: {
       averageRating: {
@@ -66,6 +76,7 @@ export const findTeacherQuery = ({ filters, priceRange, offset, limit }: any) =>
     }
   });
 
+  // Match rating
   if (filters.rating) {
     const filtersRating = Number(filters.rating);
     pipeline.push({
@@ -170,6 +181,7 @@ export const findTeacherQuery = ({ filters, priceRange, offset, limit }: any) =>
     }
   });
 
+  // Add studentsTaught
   pipeline.push({
     $addFields: {
       studentsTaught: {
@@ -178,6 +190,7 @@ export const findTeacherQuery = ({ filters, priceRange, offset, limit }: any) =>
     }
   });
 
+  // Lookup profileImage
   pipeline.push({
     $lookup: {
       from: 'attachments',
@@ -188,10 +201,12 @@ export const findTeacherQuery = ({ filters, priceRange, offset, limit }: any) =>
     }
   });
 
+  // Add profileImage
   pipeline.push({
     $addFields: { profileImage: { $arrayElemAt: ['$profileImage.url', 0] } }
   });
 
+  // Lookup school
   pipeline.push({
     $lookup: {
       from: 'users',
@@ -209,6 +224,7 @@ export const findTeacherQuery = ({ filters, priceRange, offset, limit }: any) =>
     }
   });
 
+  // Add school
   pipeline.push({
     $addFields: {
       school: {
@@ -221,6 +237,7 @@ export const findTeacherQuery = ({ filters, priceRange, offset, limit }: any) =>
     }
   });
 
+  // Project
   pipeline.push({
     $project: {
       _id: 1,
@@ -248,6 +265,7 @@ export const findTeacherQuery = ({ filters, priceRange, offset, limit }: any) =>
 export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
   const pipeline: any[] = [];
 
+  // Match teacherId
   pipeline.push({
     $match: {
       _id: new Types.ObjectId(teacherId),
@@ -255,6 +273,7 @@ export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
     }
   });
 
+  // Lookup profile
   pipeline.push({
     $lookup: {
       from: 'teacherprofiles',
@@ -264,8 +283,10 @@ export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
     }
   });
 
+  // Unwind profile
   pipeline.push({ $unwind: { path: '$profile' } });
 
+  // Lookup profileImage
   pipeline.push({
     $lookup: {
       from: 'attachments',
@@ -276,10 +297,12 @@ export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
     }
   });
 
+  // Add profileImage
   pipeline.push({
     $addFields: { profileImage: { $arrayElemAt: ['$profileImage.url', 0] } }
   });
 
+  // Lookup highlights
   pipeline.push({
     $lookup: {
       from: 'attachments',
@@ -303,6 +326,7 @@ export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
     }
   });
 
+  // Add highlights
   pipeline.push({
     $addFields: {
       highlights: {
@@ -311,6 +335,7 @@ export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
     }
   });
 
+  // Lookup intro
   pipeline.push({
     $lookup: {
       from: 'attachments',
@@ -334,6 +359,7 @@ export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
     }
   });
 
+  // Add intro
   pipeline.push({
     $addFields: {
       intro: {
@@ -342,6 +368,7 @@ export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
     }
   });
 
+  // Lookup FeedbackRatings And count reviews and other operations
   pipeline.push({
     $lookup: {
       from: 'feedbackratings',
@@ -414,6 +441,7 @@ export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
     }
   });
 
+  // Add averageRating and reviewsCount
   pipeline.push({
     $addFields: {
       averageRating: {
@@ -423,6 +451,7 @@ export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
     }
   });
 
+  // Lookup Courses
   pipeline.push({
     $lookup: {
       from: 'courses',
@@ -444,6 +473,7 @@ export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
     }
   });
 
+  // Add studentsTaught
   pipeline.push({
     $addFields: {
       studentsTaught: {
@@ -452,6 +482,7 @@ export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
     }
   });
 
+  // Lookup Courses
   pipeline.push({
     $lookup: {
       from: 'courses',
@@ -484,6 +515,7 @@ export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
     }
   });
 
+  // Add available Courses Count
   pipeline.push({
     $addFields: {
       availableCoursesCount: {
@@ -508,6 +540,7 @@ export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
     }
   });
 
+  // Project
   pipeline.push({
     $project: {
       _id: 1,

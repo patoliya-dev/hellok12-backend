@@ -1,4 +1,5 @@
 import { Schema, model, Types, Document } from 'mongoose';
+import { normalizeToHHMM24, parseHHMM } from '../modules/lessons/lesson.util';
 
 export interface LessonDoc extends Document {
   courseId: Types.ObjectId;
@@ -53,18 +54,6 @@ const LessonSchema = new Schema<LessonDoc>(
   { timestamps: true }
 );
 
-/** Helper: parse "HH:MM AM/PM" into 24h hours/minutes */
-function parseClock(time: string): { hours: number; minutes: number } {
-  const m = time.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
-  if (!m) throw new Error('Invalid schedule.time format. Use "HH:MM AM/PM"');
-  let hours = parseInt(m[1], 10);
-  const minutes = parseInt(m[2], 10);
-  const meridiem = m[3].toUpperCase();
-  if (hours === 12) hours = 0; // 12AM -> 0, 12PM -> +12 after
-  if (meridiem === 'PM') hours += 12;
-  return { hours, minutes };
-}
-
 /** Derive startAt/endAt on create/update */
 LessonSchema.pre('validate', function (next) {
   try {
@@ -72,7 +61,17 @@ LessonSchema.pre('validate', function (next) {
     const { schedule } = this as LessonDoc;
     if (!schedule?.date || !schedule?.time || !schedule?.duration) return next();
 
-    const { hours, minutes } = parseClock(schedule.time);
+    // normalize time -> "HH:MM" 24h
+    const normalized = normalizeToHHMM24(String(schedule.time));
+    if (!normalized)
+      return next(
+        new Error(
+          'Invalid schedule.time format. Acceptable examples: "09:30", "09:30 AM", "12:00 PM", "23:15".'
+        )
+      );
+
+    // parse hh/mm
+    const { hours, minutes } = parseHHMM(normalized);
     const d = new Date(schedule.date); // treat schedule.date as local date
     const start = new Date(
       Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), hours, minutes, 0, 0)
@@ -95,5 +94,6 @@ LessonSchema.index({ isTrialAvailable: 1, startAt: 1 });
 LessonSchema.index({ courseId: 1, startAt: -1 });
 LessonSchema.index({ courseId: 1, title: 1 });
 LessonSchema.index({ courseId: 1, status: 1 });
+LessonSchema.index({ teacherId: 1, schedule: 1 });
 
 export const Lesson = model<LessonDoc>('Lesson', LessonSchema);

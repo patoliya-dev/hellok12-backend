@@ -3,8 +3,9 @@ import { createErrorResponse, createSuccessResponse } from '../../utils/apiRespo
 import { courseCreateSchema, courseUpdateSchema, listQuerySchema } from './course.schemas';
 import { CourseService } from './course.service';
 import { USER_ROLES } from '../../utils/constants';
+import { ValidatedRequest } from '../../middlewares/validation';
 
-export const createCourse = async (req: Request, res: Response) => {
+export const createCourse = async (req: ValidatedRequest, res: Response) => {
   const parsed = courseCreateSchema.safeParse(req.body);
   if (!parsed.success)
     return res.status(422).json(createErrorResponse(parsed.error.message, 'Validation Error', 422));
@@ -36,14 +37,6 @@ export const updateCourse = async (req: Request, res: Response) => {
           id: string;
         }
       | undefined = { role, id: req.user!.id };
-
-    // const introImageRef =
-    //   (parsed.data as any).introImageAttachmentId && (parsed.data as any).introImageUrl
-    //     ? {
-    //       attachmentId: (parsed.data as any).introImageAttachmentId,
-    //       url: (parsed.data as any).introImageUrl
-    //     }
-    //     : undefined;
 
     const updated = await CourseService.update(req.params.id, parsed.data, owner);
 

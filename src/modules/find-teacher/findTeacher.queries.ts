@@ -491,7 +491,17 @@ export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
           $filter: {
             input: '$courses',
             as: 'course',
-            cond: { $lt: ['$$course.enrolledCount', '$$course.studentCapacity'] }
+            cond: {
+              $or: [
+                { $eq: ['$$course.lessonType', '1-on-1'] },
+                {
+                  $and: [
+                    { $eq: ['$$course.lessonType', 'group'] },
+                    { $lt: ['$$course.enrolledCount', '$$course.studentCapacity'] }
+                  ]
+                }
+              ]
+            }
           }
         }
       }

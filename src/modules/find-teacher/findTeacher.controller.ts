@@ -30,7 +30,17 @@ export const FindTeacherController = {
   async getTeacher(req: Request, res: Response, next: NextFunction) {
     try {
       const { teacherId } = req.params;
+
+      if (!teacherId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid teacherId',
+          error: 'Invalid teacherId'
+        });
+      }
+
       const teacher = await FindTeacherService.get(teacherId);
+
       return res.status(200).json({
         success: true,
         message: 'Teacher fetched successfully',

@@ -35,7 +35,7 @@ const CourseSchema = new Schema<CourseDoc>(
   {
     title: { type: String, required: true, trim: true },
     description: { type: String, default: '' },
-    language: { type: String, required: true, index: true },
+    language: { type: String, required: true },
     lessonType: { type: String, enum: ['1-on-1', 'group'], required: true },
     studentCapacity: { type: Number, min: 1, default: 1 },
     mode: { type: String, enum: ['online', 'in-person'], required: true },

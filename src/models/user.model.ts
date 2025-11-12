@@ -364,6 +364,13 @@ UserSchema.virtual('profileImage', {
   match: { entityType: 'User', status: 'READY' }
 });
 
+UserSchema.virtual('courses', {
+  ref: 'Course',
+  localField: '_id',
+  foreignField: 'teachers',
+  justOne: false
+});
+
 // Pre-save middleware
 UserSchema.pre('save', async function (next) {
   // Hash password if modified

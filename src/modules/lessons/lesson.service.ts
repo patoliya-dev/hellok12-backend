@@ -2,6 +2,7 @@ import { Lesson, LessonDoc } from '../../models/lesson.model';
 import { Course } from '../../models/course.model';
 import { FilterQuery, Types } from 'mongoose';
 import { LessonItemInput } from './lesson.schemas';
+import { normalizeToHHMM24, parseStartEnd } from './lesson.util';
 
 type CreateArgs = { courseId: Types.ObjectId; lessons: LessonItemInput[] };
 type UpdateArgs = {
@@ -47,21 +48,6 @@ function fromKeyDir(key?: string, dir?: 'asc' | 'desc') {
   if (!key || !dir) return undefined;
   const d = dir.toLowerCase() === 'asc' ? 1 : -1;
   return { [key]: d, _id: 1 } as Record<string, 1 | -1>;
-}
-
-function parseStartEnd(schedule: { date: Date; time: string; duration: number }) {
-  const [hhmm, ampm] = schedule.time.split(' ');
-  const [hhStr, mmStr] = hhmm.split(':');
-  let hours = parseInt(hhStr, 10);
-  const minutes = parseInt(mmStr, 10);
-  const isPM = ampm.toUpperCase() === 'PM';
-  hours = (hours % 12) + (isPM ? 12 : 0);
-
-  // Interpret date as local day; adjust if you store everything UTC
-  const start = new Date(schedule.date);
-  start.setHours(hours, minutes, 0, 0);
-  const end = new Date(start.getTime() + schedule.duration * 60_000);
-  return { startAt: start, endAt: end };
 }
 
 async function getNextOrderForCourse(courseId: Types.ObjectId) {
@@ -120,6 +106,32 @@ export const LessonService = {
       data.order = last ? (last.order || 0) + 1 : 0;
     }
 
+    // Normalize schedule.time to HH:MM and ensure startAt/endAt are Dates
+    if (data.schedule) {
+      const normalizedTime = normalizeToHHMM24((data.schedule as any).time);
+      if (normalizedTime) (data.schedule as any).time = normalizedTime;
+      // If startAt provided as string, convert to Date
+      if (data.startAt && typeof data.startAt === 'string') {
+        data.startAt = new Date(data.startAt);
+      }
+      // If startAt not provided but time/date present, compute startAt/endAt
+      if (!(data as any).startAt) {
+        const { startAt, endAt } = parseStartEnd({
+          date: (data.schedule as any).date,
+          time: (data.schedule as any).time,
+          duration: (data.schedule as any).duration
+        });
+        (data as any).startAt = startAt;
+        (data as any).endAt = endAt;
+      } else {
+        // ensure endAt derived from startAt + duration if not provided
+        if (!(data as any).endAt) {
+          const dur = Number((data.schedule as any).duration || 0);
+          (data as any).endAt = new Date((data as any).startAt.getTime() + dur * 60000);
+        }
+      }
+    }
+
     const doc = await Lesson.create(data);
 
     // reflect course.isTrialAvailable
@@ -148,6 +160,23 @@ export const LessonService = {
         startAt: { $gte: new Date() }
       });
       if (exists) throw new Error('TRIAL_EXISTS');
+    }
+
+    // If schedule in patch, normalize & compute startAt/endAt
+    if (patch.schedule) {
+      const normalizedTime = normalizeToHHMM24((patch.schedule as any).time);
+      if (normalizedTime) (patch.schedule as any).time = normalizedTime;
+      if ((patch.schedule as any).startAt) {
+        (patch as any).startAt = new Date((patch.schedule as any).startAt as any);
+      } else {
+        const { startAt, endAt } = parseStartEnd({
+          date: (patch.schedule as any).date ?? before.schedule?.date,
+          time: (patch.schedule as any).time ?? before.schedule?.time,
+          duration: (patch.schedule as any).duration ?? before.schedule?.duration
+        });
+        (patch as any).startAt = startAt;
+        (patch as any).endAt = endAt;
+      }
     }
 
     const updated = await Lesson.findByIdAndUpdate(
@@ -291,7 +320,19 @@ export const LessonService = {
         throw e;
       }
 
-      const { startAt, endAt } = parseStartEnd(l.schedule);
+      // Normalize time & parse start/end
+      const normalizedTime = normalizeToHHMM24(l.schedule.time);
+      if (!normalizedTime) {
+        const e = new Error('Invalid schedule.time');
+        (e as any).code = '422_VALIDATION';
+        (e as any).fields = [
+          { path: `lessons.${i}.schedule.time`, message: 'Invalid time format' }
+        ];
+        throw e;
+      }
+      l.schedule.time = normalizedTime;
+
+      const { startAt, endAt } = parseStartEnd(l.schedule as any);
 
       // Prevent overlap conflicts
       await checkOverlap({ teacherId, courseId, startAt, endAt });
@@ -355,12 +396,27 @@ export const LessonService = {
       if (u.status !== undefined) $set.status = u.status;
 
       if (u.schedule) {
-        const base = await Lesson.findOne({ _id, courseId }).select({ schedule: 1 }).lean();
+        const base = await Lesson.findOne({ _id, courseId })
+          .select({ schedule: 1, startAt: 1, endAt: 1 })
+          .lean();
         const merged = {
           date: u.schedule.date ?? base?.schedule?.date,
           time: u.schedule.time ?? base?.schedule?.time,
           duration: u.schedule.duration ?? base?.schedule?.duration
-        };
+        } as any;
+
+        // Normalize time if present
+        if (merged.time) {
+          const nt = normalizeToHHMM24(merged.time);
+          if (!nt) {
+            const e = new Error('Invalid schedule.time');
+            (e as any).code = '422_VALIDATION';
+            (e as any).fields = [{ path: `updates.schedule.time`, message: 'Invalid time format' }];
+            throw e;
+          }
+          merged.time = nt;
+        }
+
         const { startAt, endAt } = parseStartEnd(merged as any);
         await checkOverlap({ teacherId, courseId, startAt, endAt, exceptId: _id });
         $set.schedule = merged;

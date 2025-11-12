@@ -7,7 +7,12 @@ import {
   toMinutes,
   toHHMM,
   weekdayFromISO,
-  mapToPlain
+  mapToPlain,
+  buildSlotItemsFromMinutes,
+  lessonExistsForWeekdaySlot,
+  lessonExistsForDateSlot,
+  getLessonMinutesForDate,
+  weeklyBaselineForDate
 } from './schedule.util';
 
 type Lean<T> = Omit<T, keyof Document> & { _id: Types.ObjectId };
@@ -67,6 +72,42 @@ export class ScheduleService {
       }
     }
 
+    // === Validate that we are not removing weekly slots that are used by lessons ===
+    if (body.weekly && existing) {
+      // For each weekday, detect removed slots (existing minus incoming) and check lessons
+      const conflicts: Array<{ weekday: number; slot: string }> = [];
+
+      const incomingWeeklyMins: Partial<Record<number, number[]>> = {};
+      for (const k of Object.keys(body.weekly)) {
+        const idx = Number(k);
+        incomingWeeklyMins[idx] = (body.weekly as any)[k]
+          ? normalizeTimes((body.weekly as any)[k]).map(toMinutes)
+          : [];
+      }
+
+      for (let dow = 0; dow <= 6; dow++) {
+        const existingArr: number[] = (existing.weekly && (existing.weekly as any)[dow]) || [];
+        const incomingArr: number[] = incomingWeeklyMins[dow] || [];
+        const removed = existingArr.filter(m => !incomingArr.includes(m));
+        for (const m of removed) {
+          const exists = await lessonExistsForWeekdaySlot(teacherId, dow, m);
+          if (exists) {
+            conflicts.push({ weekday: dow, slot: toHHMM(m) });
+          }
+        }
+      }
+
+      if (conflicts.length) {
+        const e = new Error('Cannot remove slots used by existing lessons');
+        (e as any).code = '422_VALIDATION';
+        (e as any).fields = conflicts.map(c => ({
+          path: `body.weekly.${c.weekday}`,
+          message: `Slot ${c.slot} is used by existing lesson`
+        }));
+        throw e;
+      }
+    }
+
     const $set: Partial<TeacherScheduleDoc> = {};
     if (body.slotMinutes) $set.slotMinutes = body.slotMinutes;
     if (body.weekly) $set.weekly = weeklyMins as any;
@@ -84,53 +125,35 @@ export class ScheduleService {
   static async getSlotsForDate(
     teacherId: Types.ObjectId,
     dateISO: string
-  ): Promise<{ slots: string[] }> {
+  ): Promise<{ slots: { disabled: boolean; minutes: number; label: string }[] }> {
     // Auto-create on first visit
     const sched = await this.getOrCreate(teacherId);
+    const slot = sched.slotMinutes ?? 60;
 
+    // Normalize overrides to plain object
     const overridesObj = mapToPlain<number[]>(sched.overrides);
 
-    // Distinguish between “no entry” and “empty array”
+    // If override key exists in overridesObj:
     if (Object.prototype.hasOwnProperty.call(overridesObj, dateISO)) {
-      const override = overridesObj[dateISO] || [];
-      // Return exactly what's stored, even if empty
-      return { slots: normalizeMinutes(override).map(toHHMM) };
+      // explicit override (could be [] to block all slots)
+      const overrideMins = overridesObj[dateISO] || [];
+      // return slot items (disabled flags computed by checking lessons)
+      const slotItems = buildSlotItemsFromMinutes(overrideMins, slot);
+      // mark disabled where lessons already exist at that minute
+      const usedMinutes = await getLessonMinutesForDate(teacherId, dateISO);
+      return { slots: slotItems.map(s => ({ ...s, disabled: usedMinutes.has(s.minutes) })) };
     }
 
-    // Fallback to weekly if no override entry
+    // Fallback: compute from weekly by weekday
     const w = weekdayFromISO(dateISO) as 0 | 1 | 2 | 3 | 4 | 5 | 6;
-    const mins = (sched.weekly && (sched.weekly as any)[w]) || [];
-    return { slots: normalizeMinutes(mins).map(toHHMM) };
-  }
+    const weeklyMins = (sched.weekly && (sched.weekly as any)[w]) || [];
 
-  // ---------------- helpers ----------------
+    const slotItems = buildSlotItemsFromMinutes(weeklyMins, slot);
 
-  /** Return the weekly baseline (minutes[]) for a given ISO date (YYYY-MM-DD). */
-  private static weeklyBaselineForDate(
-    sched: ScheduleLean | TeacherScheduleDoc,
-    dateISO: string
-  ): number[] {
-    const w = weekdayFromISO(dateISO) as 0 | 1 | 2 | 3 | 4 | 5 | 6;
-    const weeklyAny = (sched.weekly as any) || {};
-    const list: number[] = Array.isArray(weeklyAny[w]) ? weeklyAny[w] : [];
-    return normalizeMinutes(list);
-  }
+    // Determine lesson-used minutes for that date and mark disabled accordingly
+    const usedMinutes = await getLessonMinutesForDate(teacherId, dateISO);
 
-  /** Convert an HH:MM[] list to minutes[], aligned/validated against the slot size. */
-  private static validateAndToMinutes(
-    times: string[],
-    slotMinutes: number,
-    field: string
-  ): number[] {
-    const normTimes = normalizeTimes(times || []);
-    const err = ensureAligned(normTimes, slotMinutes);
-    if (err) {
-      const e = new Error(err);
-      (e as any).code = '422_VALIDATION';
-      (e as any).fields = [{ path: field, message: err }];
-      throw e;
-    }
-    return normTimes.map(toMinutes);
+    return { slots: slotItems.map(s => ({ ...s, disabled: usedMinutes.has(s.minutes) })) };
   }
 
   /** Add/remove/toggle slots for one date override (strings HH:MM) */
@@ -138,77 +161,84 @@ export class ScheduleService {
     teacherId: Types.ObjectId,
     body: { date: string; add?: string[]; remove?: string[]; toggle?: string[] }
   ): Promise<{ date: string; slots: string[] }> {
-    let sched = await TeacherSchedule.findOne({ teacherId });
-    if (!sched) {
-      sched = await TeacherSchedule.create({
-        teacherId,
-        slotMinutes: 60,
-        weekly: {},
-        overrides: {}
-      });
+    const sched = await TeacherSchedule.findOne({ teacherId });
+    const slot = sched?.slotMinutes ?? 60;
+
+    const add = normalizeTimes(body.add || []);
+    const remove = normalizeTimes(body.remove || []);
+    const toggle = normalizeTimes(body.toggle || []);
+
+    for (const arr of [add, remove, toggle]) {
+      const err = ensureAligned(arr, slot);
+      if (err) {
+        const e = new Error(err);
+        (e as any).code = '422_VALIDATION';
+        (e as any).fields = [{ path: 'body', message: err }];
+        throw e;
+      }
     }
 
-    const slot = sched.slotMinutes ?? 60;
+    // Ensure doc exists if we’re mutating
+    const doc =
+      sched ||
+      (await TeacherSchedule.create({
+        teacherId,
+        slotMinutes: slot,
+        weekly: {},
+        overrides: {}
+      }));
 
-    // Validate inputs and convert to minutes
-    const addMins = body.add ? this.validateAndToMinutes(body.add, slot, 'body.add') : [];
-    const removeMins = body.remove
-      ? this.validateAndToMinutes(body.remove, slot, 'body.remove')
-      : [];
-    const toggleMins = body.toggle
-      ? this.validateAndToMinutes(body.toggle, slot, 'body.toggle')
-      : [];
-
-    // Normalize overrides map to a plain object for safe read/write.
-    const overridesObj = mapToPlain<number[]>(sched.overrides);
-    const hasExistingOverride = Object.prototype.hasOwnProperty.call(overridesObj, body.date);
-    const currentOverride = hasExistingOverride ? overridesObj[body.date] || [] : null;
+    // Map-safe read/update
+    const existingOverrides = mapToPlain<number[]>(doc.overrides);
+    const hasExistingOverride = Object.prototype.hasOwnProperty.call(existingOverrides, body.date);
+    const current = hasExistingOverride ? existingOverrides[body.date] || [] : null;
 
     // Determine the starting point for edits:
     //  If an override exists -> start from that.
     //  Else -> start from weekly baseline (prevents accidental loss of weekly on first change).
-    const baseline = this.weeklyBaselineForDate(sched as any, body.date);
-    const startMinutes = hasExistingOverride ? currentOverride : baseline;
+    const baseline = weeklyBaselineForDate(sched as any, body.date);
+    const startMinutes = hasExistingOverride ? current : baseline;
 
-    // Apply operations
-    const set = new Set<number>(startMinutes);
-    addMins.forEach(m => set.add(m));
-    removeMins.forEach(m => set.delete(m));
-    toggleMins.forEach(m => (set.has(m) ? set.delete(m) : set.add(m)));
+    const set = new Set(startMinutes);
+    add.map(toMinutes).forEach(m => set.add(m));
+    remove.map(toMinutes).forEach(m => set.delete(m));
+    toggle.map(toMinutes).forEach(m => (set.has(m) ? set.delete(m) : set.add(m)));
 
-    // Build the next value
-    const nextMinutes = normalizeMinutes(Array.from(set));
+    // === NEW: Validate we are not removing slots used by lessons on this date ===
+    const resulting = Array.from(set).sort((a, b) => a - b);
+    const removedSlots: number[] = current ? current.filter(m => !resulting.includes(m)) : [];
 
-    // If next == baseline -> remove override (clean up).
-    // Else -> persist override for that date.
-    const baselineStr = JSON.stringify(baseline);
-    const nextStr = JSON.stringify(nextMinutes);
-
-    if (nextStr === baselineStr) {
-      if (hasExistingOverride) {
-        delete overridesObj[body.date];
-      }
-    } else {
-      overridesObj[body.date] = nextMinutes;
+    const conflicts: Array<{ slot: string }> = [];
+    for (const m of removedSlots) {
+      const exists = await lessonExistsForDateSlot(teacherId, body.date, m);
+      if (exists) conflicts.push({ slot: toHHMM(m) });
+    }
+    if (conflicts.length) {
+      const e = new Error('Cannot remove slots used by existing lessons on this date');
+      (e as any).code = '422_VALIDATION';
+      (e as any).fields = conflicts.map(c => ({
+        path: 'body',
+        message: `Slot ${c.slot} is used by a lesson on ${body.date}`
+      }));
+      throw e;
     }
 
-    // Persist the overrides (write plain object; Mongoose casts back to Map)
+    existingOverrides[body.date] = resulting;
+
     const updated = await TeacherSchedule.findOneAndUpdate(
       { teacherId },
-      { $set: { overrides: overridesObj } },
+      // write plain object; Mongoose will cast back to Map<date, number[]>
+      { $set: { overrides: existingOverrides } },
       { new: true, upsert: true, lean: true }
     );
 
-    // Compute effective slots for response:
-    //  If override exists after save -> return it.
-    //  Else -> return weekly baseline (so UI reflects "back to default").
+    // Map-safe read (even if lean returns Map on some drivers)
     const updatedOverrides = mapToPlain<number[]>(updated?.overrides);
     const hasOverrideAfter = Object.prototype.hasOwnProperty.call(updatedOverrides, body.date);
     const effectiveMinutes = hasOverrideAfter ? updatedOverrides[body.date] || [] : baseline;
-
     return {
       date: body.date,
-      slots: normalizeMinutes(effectiveMinutes).map(toHHMM)
+      slots: normalizeMinutes(effectiveMinutes)?.map(toHHMM)
     };
   }
 
@@ -221,8 +251,8 @@ export class ScheduleService {
     if (!sched) return { ok: false, reasons: ['NO_SCHEDULE'] };
 
     const slot = sched.slotMinutes ?? 60;
-    const { slots } = await this.getSlotsForDate(teacherId, body.date);
-    if (!slots.length) return { ok: false, reasons: ['OUTSIDE_AVAILABILITY'] };
+    const slotsRes = await this.getSlotsForDate(teacherId, body.date);
+    if (!slotsRes?.slots?.length) return { ok: false, reasons: ['OUTSIDE_AVAILABILITY'] };
 
     // Alignment
     const alignErr = ensureAligned([body.start, body.end], slot);
@@ -233,7 +263,7 @@ export class ScheduleService {
     if (e <= s) return { ok: false, reasons: ['END_BEFORE_START'] };
 
     // Build a set of available minutes for quick containment check
-    const available = new Set(slots.map(toMinutes));
+    const available = new Set(slotsRes.slots.map(si => si.minutes));
     for (let t = s; t < e; t += slot) {
       if (!available.has(t)) return { ok: false, reasons: ['OUTSIDE_AVAILABILITY'] };
     }

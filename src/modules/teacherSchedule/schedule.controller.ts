@@ -56,6 +56,24 @@ export const getSlotsForDate = async (req: ValidatedRequest, res: Response) => {
   }
 };
 
+export const getSlotsForMonth = async (req: ValidatedRequest, res: Response) => {
+  try {
+    const teacherId = new Types.ObjectId(req.params.teacherId);
+    const { month } = req.validatedQuery || req.query;
+    const data = await ScheduleService.getSlotsForMonth(teacherId, String(month));
+    return res.status(200).json(createSuccessResponse(data, 'Month slots fetched', 200));
+  } catch (e: any) {
+    console.log('e', e);
+
+    if (e?.code === '404_NOT_FOUND') {
+      return res.status(404).json(createErrorResponse('Schedule not found', '404_NOT_FOUND', 404));
+    }
+    return res
+      .status(500)
+      .json(createErrorResponse('Failed to fetch month slots', 'Internal Server Error', 500));
+  }
+};
+
 export const patchDateSlots = async (req: ValidatedRequest, res: Response) => {
   try {
     const teacherId = new Types.ObjectId(req.params.teacherId);

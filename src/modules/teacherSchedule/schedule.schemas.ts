@@ -7,6 +7,8 @@ const id24 = z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid ObjectId');
 const slotString = z.string().regex(TIME_24H, 'Time must be HH:MM (24h)');
 const slotArray = z.array(slotString).min(0);
 
+export const MONTH_YYYY_MM = /^\d{4}-(0[1-9]|1[0-2])$/;
+
 export const getScheduleSchema = z.object({
   params: z.object({ teacherId: id24 }),
   query: z.object({}).optional(),
@@ -18,6 +20,7 @@ export const upsertWeeklySchema = z.object({
   query: z.object({}).optional(),
   body: z.object({
     slotMinutes: z.coerce.number().int().min(15).max(240).optional(),
+    month: z.string().regex(MONTH_YYYY_MM, 'month must be YYYY-MM').optional(),
     weekly: z
       .object({
         0: slotArray.optional(),
@@ -36,6 +39,12 @@ export const upsertWeeklySchema = z.object({
 export const getSlotsForDateSchema = z.object({
   params: z.object({ teacherId: id24 }),
   query: z.object({ date: z.string().regex(ISO_DATE, 'date must be YYYY-MM-DD') }),
+  body: z.object({}).optional()
+});
+
+export const getSlotsForMonthSchema = z.object({
+  params: z.object({ teacherId: id24 }),
+  query: z.object({ month: z.string().regex(/^\d{4}-\d{2}$/, 'month must be YYYY-MM') }),
   body: z.object({}).optional()
 });
 

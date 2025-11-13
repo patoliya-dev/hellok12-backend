@@ -201,7 +201,18 @@ export function weeklyBaselineForDate(
   dateISO: string
 ): number[] {
   const w = weekdayFromISO(dateISO) as 0 | 1 | 2 | 3 | 4 | 5 | 6;
-  const weeklyAny = (sched.weekly as any) || {};
-  const list: number[] = Array.isArray(weeklyAny[w]) ? weeklyAny[w] : [];
-  return normalizeMinutes(list);
+  // monthKey: YYYY-MM
+  const monthKey = dateISO.slice(0, 7);
+  // Monthly-first behavior:
+  // If teacher has an explicit monthly baseline for the given monthKey, return it.
+  // IMPORTANT: Do NOT fall back to legacy `weekly` automatically — if the month entry
+  // does not exist, we treat baseline as empty (no default schedule).
+  if (sched.monthly && Object.prototype.hasOwnProperty.call(sched.monthly as any, monthKey)) {
+    const monthlyAny = (sched.monthly as any)[monthKey] || {};
+    const list: number[] = Array.isArray(monthlyAny[w]) ? monthlyAny[w] : [];
+    return normalizeMinutes(list);
+  }
+
+  // No monthly entry: return empty baseline so frontend shows empty slots.
+  return [];
 }

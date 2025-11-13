@@ -41,9 +41,12 @@ export class ScheduleService {
   /** Upsert weekly + slotMinutes (PATCH creates doc if absent) */
   static async upsertWeekly(
     teacherId: Types.ObjectId,
-    body: { slotMinutes?: number; weekly?: Partial<Record<0 | 1 | 2 | 3 | 4 | 5 | 6, string[]>> }
+    body: {
+      slotMinutes?: number;
+      weekly?: Partial<Record<0 | 1 | 2 | 3 | 4 | 5 | 6, string[]>>;
+      month?: string;
+    }
   ): Promise<ScheduleLean> {
-    // Fetch current or create defaults in memory (but write on update)
     const existing = await TeacherSchedule.findOne({ teacherId });
 
     const slot = body.slotMinutes ?? existing?.slotMinutes ?? 60;
@@ -72,27 +75,62 @@ export class ScheduleService {
       }
     }
 
-    // === Validate that we are not removing weekly slots that are used by lessons ===
+    // If user provided a month -> operate on monthly[month]; else legacy weekly behavior
+    const monthKey = body.month?.trim();
+
+    // Validate that we are not removing weekly slots that are used by lessons
     if (body.weekly && existing) {
-      // For each weekday, detect removed slots (existing minus incoming) and check lessons
+      // determine baseline array to compare against depending on target (monthly vs weekly)
       const conflicts: Array<{ weekday: number; slot: string }> = [];
 
-      const incomingWeeklyMins: Partial<Record<number, number[]>> = {};
-      for (const k of Object.keys(body.weekly)) {
-        const idx = Number(k);
-        incomingWeeklyMins[idx] = (body.weekly as any)[k]
-          ? normalizeTimes((body.weekly as any)[k]).map(toMinutes)
+      // existing source for comparison:
+      const existingWeeklySource: Record<number, number[]> = {};
+      // load existing weekly baseline (legacy)
+      for (let dow = 0; dow <= 6; dow++) {
+        existingWeeklySource[dow] = Array.isArray((existing.weekly as any)[dow])
+          ? (existing.weekly as any)[dow]
           : [];
       }
 
+      // if month provided, attempt to read existing monthly entry
+      let existingMonthlyForMonth: Record<number, number[]> | null = null;
+      if (
+        monthKey &&
+        existing.monthly &&
+        Object.prototype.hasOwnProperty.call(existing.monthly, monthKey)
+      ) {
+        existingMonthlyForMonth = (existing.monthly as any)?.[monthKey] || null;
+      }
+
       for (let dow = 0; dow <= 6; dow++) {
-        const existingArr: number[] = (existing.weekly && (existing.weekly as any)[dow]) || [];
-        const incomingArr: number[] = incomingWeeklyMins[dow] || [];
+        const existingArr: number[] = existingMonthlyForMonth
+          ? existingMonthlyForMonth[dow] || []
+          : existingWeeklySource[dow] || [];
+        const incomingArr: number[] = (weeklyMins as any)[dow] || [];
         const removed = existingArr.filter(m => !incomingArr.includes(m));
         for (const m of removed) {
-          const exists = await lessonExistsForWeekdaySlot(teacherId, dow, m);
-          if (exists) {
-            conflicts.push({ weekday: dow, slot: toHHMM(m) });
+          // if targetting a month -> check lessons for that month dates which fall on this weekday;
+          // otherwise legacy behavior checks weekday across all lessons.
+          if (monthKey) {
+            // compute all dateISO strings for that month that have this weekday and check each date
+            const [yyyy, mmStr] = monthKey.split('-').map(Number);
+            const monthIndex = mmStr - 1;
+            // iterate days of month and for those matching dow check lessonExistsForDateSlot
+            const daysInMonth = new Date(yyyy, monthIndex + 1, 0).getDate();
+            for (let d = 1; d <= daysInMonth; d++) {
+              const dayISO = `${String(yyyy).padStart(4, '0')}-${String(mmStr).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+              const weekday = weekdayFromISO(dayISO);
+              if (weekday !== dow) continue;
+              const exists = await lessonExistsForDateSlot(teacherId, dayISO, m);
+              if (exists) {
+                conflicts.push({ weekday: dow, slot: toHHMM(m) });
+                break; // stop checking more dates once conflict found for this m
+              }
+            }
+          } else {
+            // legacy: check by weekday across all lessons
+            const exists = await lessonExistsForWeekdaySlot(teacherId, dow, m);
+            if (exists) conflicts.push({ weekday: dow, slot: toHHMM(m) });
           }
         }
       }
@@ -101,16 +139,29 @@ export class ScheduleService {
         const e = new Error('Cannot remove slots used by existing lessons');
         (e as any).code = '422_VALIDATION';
         (e as any).fields = conflicts.map(c => ({
-          path: `body.weekly.${c.weekday}`,
+          path: monthKey ? `body.monthly.${monthKey}.${c.weekday}` : `body.weekly.${c.weekday}`,
           message: `Slot ${c.slot} is used by existing lesson`
         }));
         throw e;
       }
     }
 
+    // Build $set
     const $set: Partial<TeacherScheduleDoc> = {};
     if (body.slotMinutes) $set.slotMinutes = body.slotMinutes;
-    if (body.weekly) $set.weekly = weeklyMins as any;
+
+    if (body.weekly) {
+      if (monthKey) {
+        // we must merge or set the particular month's weekly mapping
+        // build a safe object to set under monthly
+        const monthlyMap = existing?.monthly ? mapToPlain<number[]>(existing.monthly) : {};
+        monthlyMap[monthKey] = weeklyMins as any;
+        $set.monthly = monthlyMap as any;
+      } else {
+        // legacy: update top-level weekly mapping
+        $set.weekly = weeklyMins as any;
+      }
+    }
 
     const updated = await TeacherSchedule.findOneAndUpdate(
       { teacherId },
@@ -144,10 +195,16 @@ export class ScheduleService {
       return { slots: slotItems.map(s => ({ ...s, disabled: usedMinutes.has(s.minutes) })) };
     }
 
-    // Fallback: compute from weekly by weekday
-    const w = weekdayFromISO(dateISO) as 0 | 1 | 2 | 3 | 4 | 5 | 6;
-    const weeklyMins = (sched.weekly && (sched.weekly as any)[w]) || [];
-
+    // Monthly-only baseline:
+    // Only use monthly baseline for the date's month. If the month entry is absent,
+    // return empty slots (no default from legacy weekly or previous months).
+    const monthKey = dateISO.slice(0, 7);
+    const monthlyMap = (sched as any).monthly || {};
+    const monthEntry = monthlyMap && monthlyMap[monthKey];
+    const weeklyMins: number[] =
+      monthEntry && Array.isArray(monthEntry[weekdayFromISO(dateISO)])
+        ? (monthEntry[weekdayFromISO(dateISO)] as number[])
+        : [];
     const slotItems = buildSlotItemsFromMinutes(weeklyMins, slot);
 
     // Determine lesson-used minutes for that date and mark disabled accordingly
@@ -156,11 +213,98 @@ export class ScheduleService {
     return { slots: slotItems.map(s => ({ ...s, disabled: usedMinutes.has(s.minutes) })) };
   }
 
+  /**
+   * Fetch month-level schedule info for a given month "YYYY-MM".
+   * Returns monthly weekly baseline (per weekday), overrides (per date), and optionally per-date slot items.
+   */
+  static async getSlotsForMonth(
+    teacherId: Types.ObjectId,
+    monthKey: string
+  ): Promise<{
+    month: string;
+    weekly: Partial<Record<number, string[]>>;
+    overrides: Record<string, { minutes: number; label: string; disabled: boolean }[]>;
+    slotsByDate?: Record<string, { minutes: number; label: string; disabled: boolean }[]>;
+  }> {
+    // validate monthKey outside or assume correct (YYYY-MM)
+    const sched = await this.getOrCreate(teacherId);
+    const slot = sched.slotMinutes ?? 60;
+
+    // build monthly weekly baseline from sched.monthly if present else fallback to sched.weekly
+    const monthlyMap = (sched as any).monthly || {};
+    const resultWeekly: Partial<Record<number, string[]>> = {};
+
+    for (let dow = 0; dow <= 6; dow++) {
+      // Use monthly baseline only (do not fallback to legacy weekly)
+      const monthEntry = monthlyMap && monthlyMap[monthKey];
+      const arr: number[] = monthEntry && Array.isArray(monthEntry[dow]) ? monthEntry[dow] : [];
+      resultWeekly[dow] = (arr || []).map((m: number) => toHHMM(m));
+    }
+
+    // collect all overrides within that month (keys like YYYY-MM-DD)
+    const overridesPlain = mapToPlain<number[]>((sched.overrides as any) || {});
+    const overridesForMonth: Record<string, number[]> = {};
+    const slotsByDate: Record<string, { minutes: number; label: string; disabled: boolean }[]> = {};
+
+    // compute date range for the month
+    const [yearStr, monthStr] = monthKey.split('-');
+    const y = Number(yearStr);
+    const m = Number(monthStr) - 1;
+    const first = new Date(Date.UTC(y, m, 1));
+    const last = new Date(Date.UTC(y, m + 1, 0));
+
+    // iterate through days in month and prepare slot items
+    for (let d = 1; d <= last.getUTCDate(); d++) {
+      const yyyy = y;
+      const mm = String(m + 1).padStart(2, '0');
+      const dd = String(d).padStart(2, '0');
+      const iso = `${yyyy}-${mm}-${dd}`;
+
+      const overrideMins = overridesPlain[iso];
+      let effectiveMins: number[] = [];
+
+      if (Object.prototype.hasOwnProperty.call(overridesPlain, iso)) {
+        effectiveMins = overrideMins || [];
+      } else {
+        // Monthly-only baseline for that weekday, or empty if month not defined.
+        const dow = weekdayFromISO(iso);
+        const baseline =
+          (sched.monthly &&
+            (sched.monthly as any)[monthKey] &&
+            (sched.monthly as any)[monthKey][dow]) ||
+          [];
+        effectiveMins = Array.isArray(baseline) ? baseline : [];
+      }
+
+      // build slot items and mark disabled if lessons exist
+      const slotItems = buildSlotItemsFromMinutes(effectiveMins, slot);
+      const usedMinutes = await getLessonMinutesForDate(teacherId, iso);
+      const finalItems = slotItems.map(s => ({ ...s, disabled: usedMinutes.has(s.minutes) }));
+
+      slotsByDate[iso] = finalItems;
+      if (Object.prototype.hasOwnProperty.call(overridesPlain, iso)) {
+        overridesForMonth[iso] = overrideMins || [];
+      }
+    }
+
+    return {
+      month: monthKey,
+      weekly: resultWeekly,
+      overrides: Object.keys(overridesForMonth).length
+        ? Object.fromEntries(Object.keys(overridesForMonth).map(d => [d, slotsByDate[d]]))
+        : {},
+      slotsByDate
+    };
+  }
+
   /** Add/remove/toggle slots for one date override (strings HH:MM) */
   static async patchDateSlots(
     teacherId: Types.ObjectId,
     body: { date: string; add?: string[]; remove?: string[]; toggle?: string[] }
   ): Promise<{ date: string; slots: string[] }> {
+    // --------------------------
+    // 1) Load schedule and validate
+    // --------------------------
     const sched = await TeacherSchedule.findOne({ teacherId });
     const slot = sched?.slotMinutes ?? 60;
 
@@ -168,6 +312,7 @@ export class ScheduleService {
     const remove = normalizeTimes(body.remove || []);
     const toggle = normalizeTimes(body.toggle || []);
 
+    // ensure times align to slotMinutes
     for (const arr of [add, remove, toggle]) {
       const err = ensureAligned(arr, slot);
       if (err) {
@@ -178,38 +323,47 @@ export class ScheduleService {
       }
     }
 
-    // Ensure doc exists if we’re mutating
+    // Ensure doc exists for mutation (minimal safe defaults)
     const doc =
       sched ||
       (await TeacherSchedule.create({
         teacherId,
         slotMinutes: slot,
         weekly: {},
+        monthly: {},
         overrides: {}
       }));
 
-    // Map-safe read/update
-    const existingOverrides = mapToPlain<number[]>(doc.overrides);
+    // --------------------------
+    // 2) Source-of-truth & working set
+    //    priority: override -> monthly -> legacy weekly -> []
+    // --------------------------
+    const existingOverrides = mapToPlain<number[]>((doc.overrides as any) || {});
     const hasExistingOverride = Object.prototype.hasOwnProperty.call(existingOverrides, body.date);
-    const current = hasExistingOverride ? existingOverrides[body.date] || [] : null;
+    const currentOverride = hasExistingOverride ? existingOverrides[body.date] || [] : null;
 
-    // Determine the starting point for edits:
-    //  If an override exists -> start from that.
-    //  Else -> start from weekly baseline (prevents accidental loss of weekly on first change).
-    const baseline = weeklyBaselineForDate(sched as any, body.date);
-    const startMinutes = hasExistingOverride ? current : baseline;
+    const baseline = weeklyBaselineForDate(doc as any, body.date) || [];
 
-    const set = new Set(startMinutes);
-    add.map(toMinutes).forEach(m => set.add(m));
-    remove.map(toMinutes).forEach(m => set.delete(m));
-    toggle.map(toMinutes).forEach(m => (set.has(m) ? set.delete(m) : set.add(m)));
+    // Source for applying deltas
+    const source = hasExistingOverride ? currentOverride || [] : baseline;
 
-    // === NEW: Validate we are not removing slots used by lessons on this date ===
-    const resulting = Array.from(set).sort((a, b) => a - b);
-    const removedSlots: number[] = current ? current.filter(m => !resulting.includes(m)) : [];
+    // Work with minutes set
+    const working = new Set<number>((source || []).map(Number));
+    add.map(toMinutes).forEach(m => working.add(m));
+    remove.map(toMinutes).forEach(m => working.delete(m));
+    toggle.map(toMinutes).forEach(m => (working.has(m) ? working.delete(m) : working.add(m)));
+
+    const resulting = Array.from(working).sort((a, b) => a - b);
+
+    // --------------------------
+    // 3) Validate removals against existing lessons
+    //    (removals are computed relative to the authoritative previous set)
+    // --------------------------
+    const removedComparedTo = hasExistingOverride ? currentOverride || [] : baseline;
+    const removed = (removedComparedTo || []).filter(m => !resulting.includes(m));
 
     const conflicts: Array<{ slot: string }> = [];
-    for (const m of removedSlots) {
+    for (const m of removed) {
       const exists = await lessonExistsForDateSlot(teacherId, body.date, m);
       if (exists) conflicts.push({ slot: toHHMM(m) });
     }
@@ -223,22 +377,50 @@ export class ScheduleService {
       throw e;
     }
 
-    existingOverrides[body.date] = resulting;
+    // --------------------------
+    // 4) Persist: only update overrides map
+    //    - If resulting equals baseline AND the user did NOT explicitly operate to make it empty,
+    //      then remove the override (no-op). BUT:
+    //    - If resulting is empty but the user provided operations (explicit removal), persist explicit empty override.
+    // --------------------------
+    const baselineSorted = (baseline || []).slice().sort((a, b) => a - b);
+    const equalToBaseline =
+      resulting.length === baselineSorted.length &&
+      resulting.every((v, i) => baselineSorted[i] === v);
+
+    const userDidMutate = !!(add.length || remove.length || toggle.length);
+
+    if (equalToBaseline) {
+      if (userDidMutate) {
+        // user operated but resulting matches baseline:
+        // if resulting is empty -> persist explicit empty override (requirement #6)
+        if (resulting.length === 0) {
+          existingOverrides[body.date] = [];
+        } else {
+          // user mutated but final matches baseline -> delete override (no-op)
+          if (hasExistingOverride) delete existingOverrides[body.date];
+        }
+      } else {
+        // no user mutation & equals baseline -> no-op
+        // (shouldn't happen normally; do nothing)
+      }
+    } else {
+      // different from baseline -> persist explicit override (even if empty due to explicit removes)
+      existingOverrides[body.date] = resulting;
+    }
 
     const updated = await TeacherSchedule.findOneAndUpdate(
       { teacherId },
-      // write plain object; Mongoose will cast back to Map<date, number[]>
       { $set: { overrides: existingOverrides } },
       { new: true, upsert: true, lean: true }
     );
 
-    // Map-safe read (even if lean returns Map on some drivers)
-    const updatedOverrides = mapToPlain<number[]>(updated?.overrides);
+    const updatedOverrides = mapToPlain<number[]>((updated?.overrides as any) || {});
     const hasOverrideAfter = Object.prototype.hasOwnProperty.call(updatedOverrides, body.date);
     const effectiveMinutes = hasOverrideAfter ? updatedOverrides[body.date] || [] : baseline;
     return {
       date: body.date,
-      slots: normalizeMinutes(effectiveMinutes)?.map(toHHMM)
+      slots: normalizeMinutes(effectiveMinutes || [])?.map(toHHMM)
     };
   }
 

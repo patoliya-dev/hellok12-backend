@@ -6,7 +6,8 @@ import {
   upsertWeeklySchema,
   getSlotsForDateSchema,
   patchDateSlotsSchema,
-  validateLessonBlockSchema
+  validateLessonBlockSchema,
+  getSlotsForMonthSchema
 } from './schedule.schemas';
 import * as ctrl from './schedule.controller';
 
@@ -38,6 +39,14 @@ r.get(
   authorize(allow),
   validateRequest(getSlotsForDateSchema),
   ctrl.getSlotsForDate
+);
+
+r.get(
+  '/:teacherId/schedule/month',
+  authenticate,
+  authorize(allow),
+  validateRequest(getSlotsForMonthSchema),
+  ctrl.getSlotsForMonth
 );
 
 // 4) Patch slots for a specific date (override add/remove/toggle)

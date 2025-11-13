@@ -49,5 +49,6 @@ r.post(
   lessonCtrl.reorderLessons
 );
 r.get('/getCourseDetails/:id', courseCtrl.courseDetails);
+r.get('/getCourseFeedbacks/:id', courseCtrl.courseFeedbacks);
 
 export default r;

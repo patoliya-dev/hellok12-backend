@@ -2,7 +2,8 @@ import { FilterQuery, Types } from 'mongoose';
 import { Course, CourseDoc } from '../../models/course.model';
 import { Lesson } from '../../models/lesson.model';
 import { CourseCreateDTO, CourseUpdateDTO } from './course.schemas';
-import { getCourseDetails } from './course.queries';
+import { getCourseDetails, getFeedbacks } from './course.queries';
+import { FeedbackRating } from '../../models/feedbackRatings.model';
 
 export const CourseService = {
   async create(data: CourseCreateDTO, owner: { role: 'school' | 'teacher'; id: string }) {
@@ -221,6 +222,22 @@ export const CourseService = {
         return result[0];
       } else {
         throw new Error('Course not found');
+      }
+    } catch (error: any) {
+      throw new Error(error.message);
+    }
+  },
+
+  async getCourseFeedbacks(id: string, sortBy: 'recent' | 'highest', limit: number) {
+    try {
+      const pipeline = getFeedbacks(id, sortBy, limit);
+
+      const result = await FeedbackRating.aggregate(pipeline as any);
+
+      if (result.length > 0) {
+        return result[0];
+      } else {
+        return [];
       }
     } catch (error: any) {
       throw new Error(error.message);

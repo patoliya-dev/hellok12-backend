@@ -49,51 +49,6 @@ export const getCourseDetails = (id: string) => {
       from: 'feedbackratings',
       localField: '_id',
       foreignField: 'course',
-      pipeline: [
-        {
-          $lookup: {
-            from: 'users',
-            localField: 'author',
-            foreignField: '_id',
-            pipeline: [
-              {
-                $lookup: {
-                  from: 'attachments',
-                  localField: '_id',
-                  foreignField: 'entityId',
-                  pipeline: [
-                    { $match: { status: 'READY', entityType: 'User' } },
-                    { $project: { url: 1 } }
-                  ],
-                  as: 'profileImage'
-                }
-              },
-              {
-                $addFields: { profileImage: { $arrayElemAt: ['$profileImage', 0] } }
-              },
-              {
-                $project: {
-                  _id: 1,
-                  name: 1,
-                  createdAt: 1,
-                  profileImage: 1
-                }
-              }
-            ],
-            as: 'author'
-          }
-        },
-        { $unwind: { path: '$author', preserveNullAndEmptyArrays: true } }
-      ],
-      as: 'ratings'
-    }
-  });
-
-  pipeline.push({
-    $lookup: {
-      from: 'feedbackratings',
-      localField: '_id',
-      foreignField: 'course',
       as: 'feedbacks'
     }
   });
@@ -119,7 +74,6 @@ export const getCourseDetails = (id: string) => {
       isTrialAvailable: 1,
       lessons: 1,
       introImageRef: 1,
-      ratings: 1,
       averageRating: 1,
       reviewsCount: 1,
       teachers: 1,
@@ -129,4 +83,156 @@ export const getCourseDetails = (id: string) => {
   });
 
   return pipeline;
+};
+
+export const getFeedbacks = (id: string, sortBy: 'recent' | 'highest', limit: number) => {
+  const sortStage = sortBy === 'recent' ? { createdAt: -1 } : { rating: -1 };
+
+  return [
+    {
+      $match: {
+        course: new mongoose.Types.ObjectId(id)
+      }
+    },
+
+    {
+      $facet: {
+        stats: [
+          {
+            $group: {
+              _id: '$rating',
+              count: { $sum: 1 }
+            }
+          },
+          {
+            $group: {
+              _id: null,
+              distribution: {
+                $push: {
+                  k: { $toString: '$_id' },
+                  v: '$count'
+                }
+              },
+              totalReviews: { $sum: '$count' },
+              totalWeighted: { $sum: { $multiply: ['$_id', '$count'] } }
+            }
+          },
+          {
+            $addFields: {
+              averageRating: {
+                $cond: [
+                  { $eq: ['$totalReviews', 0] },
+                  0,
+                  { $divide: ['$totalWeighted', '$totalReviews'] }
+                ]
+              },
+
+              distribution: {
+                $arrayToObject: {
+                  $map: {
+                    input: [1, 2, 3, 4, 5],
+                    as: 'num',
+                    in: {
+                      k: { $toString: '$$num' },
+                      v: {
+                        $let: {
+                          vars: {
+                            found: {
+                              $arrayElemAt: [
+                                {
+                                  $filter: {
+                                    input: '$distribution',
+                                    as: 'd',
+                                    cond: { $eq: ['$$d.k', { $toString: '$$num' }] }
+                                  }
+                                },
+                                0
+                              ]
+                            }
+                          },
+                          in: { $ifNull: ['$$found.v', 0] }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+
+              reviewsCount: '$totalReviews'
+            }
+          },
+          {
+            $project: {
+              _id: 0,
+              averageRating: 1,
+              reviewsCount: 1,
+              distribution: 1
+            }
+          }
+        ],
+        reviews: [
+          {
+            $lookup: {
+              from: 'users',
+              localField: 'author',
+              foreignField: '_id',
+              pipeline: [
+                {
+                  $lookup: {
+                    from: 'attachments',
+                    localField: '_id',
+                    foreignField: 'entityId',
+                    pipeline: [
+                      { $match: { status: 'READY', entityType: 'User' } },
+                      { $project: { url: 1 } }
+                    ],
+                    as: 'profileImage'
+                  }
+                },
+                {
+                  $addFields: {
+                    profileImage: { $arrayElemAt: ['$profileImage', 0] }
+                  }
+                },
+                {
+                  $project: {
+                    _id: 1,
+                    name: 1,
+                    createdAt: 1,
+                    profileImage: 1
+                  }
+                }
+              ],
+              as: 'author'
+            }
+          },
+
+          { $unwind: { path: '$author', preserveNullAndEmptyArrays: true } },
+
+          { $sort: sortStage },
+
+          ...(limit ? [{ $limit: limit }] : []),
+
+          {
+            $project: {
+              _id: 1,
+              author: 1,
+              rating: 1,
+              comment: 1,
+              createdAt: 1
+            }
+          }
+        ]
+      }
+    },
+
+    {
+      $project: {
+        averageRating: { $arrayElemAt: ['$stats.averageRating', 0] },
+        reviewsCount: { $arrayElemAt: ['$stats.reviewsCount', 0] },
+        distribution: { $arrayElemAt: ['$stats.distribution', 0] },
+        reviews: 1
+      }
+    }
+  ];
 };

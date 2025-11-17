@@ -29,6 +29,9 @@ interface Config {
     S3_ASSETS_PUBLIC_BASE: string;
     S3_MAX_UPLOAD_MB: number;
   };
+  STRIPE_SECRET_KEY: string;
+  STRIPE_WEBHOOK_SECRET: string;
+  PLATFORM_FEE_PERCENT: number;
 }
 
 // Type-safe config object
@@ -52,7 +55,10 @@ const config: Config = {
     S3_ASSET_BUCKET: process.env.S3_ASSET_BUCKET || 'hellok12-assets-dev',
     S3_ASSETS_PUBLIC_BASE: `https://${process.env.S3_ASSET_BUCKET || 'hellok12-assets-dev'}.s3.us-east-1.amazonaws.com`,
     S3_MAX_UPLOAD_MB: 5
-  }
+  },
+  STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY || '',
+  STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET || '',
+  PLATFORM_FEE_PERCENT: Number(process.env.PLATFORM_FEE_PERCENT || 0.2) // 20% default
 };
 
 export default config;

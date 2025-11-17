@@ -12,8 +12,10 @@ dotenv.config();
 const app = express();
 
 const allowedOrigins = [
-  'http://localhost:5173',
-  process.env.CLIENT_URL || 'https://dev-app.hellok12.com'
+  // 'http://localhost:5173',
+  // 'http://localhost:3001',
+  process.env.CLIENT_URL || 'https://dev-app.hellok12.com',
+  'https://www.hellok12.com'
 ];
 
 const corsOptions: CorsOptions = {

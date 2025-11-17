@@ -1,7 +1,30 @@
 import { Types } from 'mongoose';
 
-export const findTeacherQuery = ({ filters, priceRange, offset, limit }: any) => {
+export const findTeacherQuery = ({ filters = {}, priceRange, offset, limit }: any) => {
   const pipeline: any[] = [];
+
+  // normalize incoming filters (defensive)
+  const modes = Array.isArray(filters.mode)
+    ? filters.mode
+    : filters.mode
+      ? typeof filters.mode === 'string' && filters.mode.startsWith('[')
+        ? JSON.parse(filters.mode)
+        : [filters.mode]
+      : [];
+  const lessonTypes = Array.isArray(filters.lessonType)
+    ? filters.lessonType
+    : filters.lessonType
+      ? typeof filters.lessonType === 'string' && filters.lessonType.startsWith('[')
+        ? JSON.parse(filters.lessonType)
+        : [filters.lessonType]
+      : [];
+  const languages = Array.isArray(filters.languages)
+    ? filters.languages
+    : filters.languages
+      ? typeof filters.languages === 'string' && filters.languages.startsWith('[')
+        ? JSON.parse(filters.languages)
+        : [filters.languages]
+      : [];
 
   // Match role and school
   pipeline.push({
@@ -30,14 +53,13 @@ export const findTeacherQuery = ({ filters, priceRange, offset, limit }: any) =>
     }
   });
 
-  // Unwind profile
   pipeline.push({ $unwind: { path: '$profile' } });
 
   const profileMatchFilters: any = {};
 
-  // Match languages
-  if (filters.languages) {
-    profileMatchFilters['profile.teachingLanguages'] = filters.languages;
+  // Match languages (use normalized languages)
+  if (languages && languages.length > 0) {
+    profileMatchFilters['profile.teachingLanguages'] = { $in: languages };
   }
 
   // Match experience
@@ -51,7 +73,6 @@ export const findTeacherQuery = ({ filters, priceRange, offset, limit }: any) =>
     profileMatchFilters['profile.ageGroupTeach'] = { $in: [filters.ageRange] };
   }
 
-  // Match rating
   if (profileMatchFilters && Object.keys(profileMatchFilters).length > 0) {
     pipeline.push({ $match: profileMatchFilters });
   }
@@ -90,13 +111,13 @@ export const findTeacherQuery = ({ filters, priceRange, offset, limit }: any) =>
   const courseLookupPipeline: any[] = [
     {
       $match: {
-        $expr: { $in: ['$$teacherId', '$teachers'] }
+        $expr: { $in: ['$$teacherId', { $ifNull: ['$teachers', []] }] }
       }
     }
   ];
 
-  // Add price range filter to course lookup
-  if (priceRange && priceRange.min && priceRange.max) {
+  // priceRange filter in lookup
+  if (priceRange && typeof priceRange.min === 'number' && typeof priceRange.max === 'number') {
     const { min, max } = priceRange;
     courseLookupPipeline.push({
       $match: {
@@ -107,26 +128,26 @@ export const findTeacherQuery = ({ filters, priceRange, offset, limit }: any) =>
     });
   }
 
-  // Add mode filter (online/in-person) to course lookup
-  if (filters.mode && Array.isArray(filters.mode) && filters.mode.length > 0) {
+  // Add mode filter if we have normalized modes
+  if (modes && modes.length > 0) {
     courseLookupPipeline.push({
       $match: {
-        mode: { $in: filters.mode }
+        mode: { $in: modes }
       }
     });
   }
 
-  // Add lessonType filter (group/1-on-1) to course lookup
-  if (filters.lessonType && Array.isArray(filters.lessonType) && filters.lessonType.length > 0) {
+  // Add lessonType filter if normalized
+  if (lessonTypes && lessonTypes.length > 0) {
     courseLookupPipeline.push({
       $match: {
-        lessonType: { $in: filters.lessonType }
+        lessonType: { $in: lessonTypes }
       }
     });
   }
 
-  // Add isTrialAvailable filter to course lookup
-  if (filters.isTrialAvailable === true) {
+  // isTrialAvailable
+  if (filters.isTrialAvailable === true || filters.isTrialAvailable === 'true') {
     courseLookupPipeline.push({
       $match: {
         isTrialAvailable: true
@@ -146,10 +167,11 @@ export const findTeacherQuery = ({ filters, priceRange, offset, limit }: any) =>
 
   // Filter out teachers with no matching courses if any course filter is applied
   const hasCourseFilters =
-    (filters.price && Array.isArray(filters.price)) ||
-    (filters.mode && Array.isArray(filters.mode) && filters.mode.length > 0) ||
-    (filters.lessonType && Array.isArray(filters.lessonType) && filters.lessonType.length > 0) ||
-    filters.isTrialAvailable === true;
+    (priceRange && priceRange.min != null && priceRange.max != null) ||
+    (modes && modes.length > 0) ||
+    (lessonTypes && lessonTypes.length > 0) ||
+    filters.isTrialAvailable === true ||
+    filters.isTrialAvailable === 'true';
 
   if (hasCourseFilters) {
     pipeline.push({
@@ -167,13 +189,13 @@ export const findTeacherQuery = ({ filters, priceRange, offset, limit }: any) =>
       pipeline: [
         {
           $match: {
-            $expr: { $in: ['$$teacherId', '$teachers'] }
+            $expr: { $in: ['$$teacherId', { $ifNull: ['$teachers', []] }] }
           }
         },
         {
           $group: {
             _id: null,
-            totalStudents: { $sum: '$enrolledCount' }
+            totalStudents: { $sum: { $ifNull: ['$enrolledCount', 0] } }
           }
         }
       ],
@@ -181,7 +203,6 @@ export const findTeacherQuery = ({ filters, priceRange, offset, limit }: any) =>
     }
   });
 
-  // Add studentsTaught
   pipeline.push({
     $addFields: {
       studentsTaught: {
@@ -283,8 +304,8 @@ export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
     }
   });
 
-  // Unwind profile
-  pipeline.push({ $unwind: { path: '$profile' } });
+  // Unwind profile - keep doc even if profile missing (defensive)
+  pipeline.push({ $unwind: { path: '$profile', preserveNullAndEmptyArrays: true } });
 
   // Lookup profileImage
   pipeline.push({
@@ -302,7 +323,7 @@ export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
     $addFields: { profileImage: { $arrayElemAt: ['$profileImage.url', 0] } }
   });
 
-  // Lookup highlights
+  // Lookup highlights (profile.highlights may be missing or empty - lookup handles that)
   pipeline.push({
     $lookup: {
       from: 'attachments',
@@ -451,7 +472,7 @@ export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
     }
   });
 
-  // Lookup Courses
+  // Lookup Courses -> studentStats (make $in robust with $ifNull)
   pipeline.push({
     $lookup: {
       from: 'courses',
@@ -459,13 +480,13 @@ export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
       pipeline: [
         {
           $match: {
-            $expr: { $in: ['$$teacherId', '$teachers'] }
+            $expr: { $in: ['$$teacherId', { $ifNull: ['$teachers', []] }] }
           }
         },
         {
           $group: {
             _id: null,
-            totalStudents: { $sum: '$enrolledCount' }
+            totalStudents: { $sum: { $ifNull: ['$enrolledCount', 0] } }
           }
         }
       ],
@@ -482,7 +503,7 @@ export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
     }
   });
 
-  // Lookup Courses
+  // Lookup Courses -> course list (again make $in robust)
   pipeline.push({
     $lookup: {
       from: 'courses',
@@ -490,7 +511,7 @@ export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
       pipeline: [
         {
           $match: {
-            $expr: { $in: ['$$teacherId', '$teachers'] }
+            $expr: { $in: ['$$teacherId', { $ifNull: ['$teachers', []] }] }
           }
         },
         {
@@ -507,7 +528,6 @@ export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
             location: 1,
             isTrialAvailable: 1,
             mode: 1
-            // Add other fields you need
           }
         }
       ],

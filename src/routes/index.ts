@@ -1,9 +1,10 @@
 import { Router } from 'express';
 import authRoutes from '../modules/auth/auth.routes';
+import userRoutes from '../modules/user/user.routes';
 import courseRoutes from '../modules/courses/course.routes';
 import lessonRoutes from '../modules/lessons/lesson.routes';
 import attachmentRoutes from '../modules/attachments/attachment.routes';
-import findTeacherRoutes from '../modules/find-teacher/findTeacher.routes';
+import findTeacherRoutes from '../modules/findTeacher/findTeacher.routes';
 import teacherSchedulesRoutes from '../modules/teacherSchedule/schedule.routes';
 import paymentsRoutes from '../modules/payments/payment.routes';
 import bookingsRoutes from '../modules/bookings/booking.routes';
@@ -18,6 +19,7 @@ const router = Router();
 
 // Prefix all routes with /api/v1 inside app.ts
 router.use('/auth', authRoutes);
+router.use('/user', userRoutes);
 router.use('/courses', courseRoutes);
 router.use('/lessons', lessonRoutes);
 router.use('/attachments', attachmentRoutes);

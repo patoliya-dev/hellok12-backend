@@ -233,3 +233,46 @@ export async function getInvoice(stripeInvoiceId: string) {
   const invoice = await stripe.invoices.retrieve(stripeInvoiceId);
   return invoice;
 }
+
+export async function attachPaymentMethodToUser(userId: string, paymentMethodId: string) {
+  const user = await User.findById(userId);
+  if (!user) throw new Error('User not found');
+
+  // ensure customer exists
+  if (!user.stripeCustomerId) {
+    const createdCustomer = await stripe.customers.create({
+      email: user.email,
+      metadata: { userId }
+    });
+    user.stripeCustomerId = createdCustomer.id;
+    await user.save();
+  }
+
+  // retrieve payment method from stripe
+  const pm = await stripe.paymentMethods.retrieve(paymentMethodId);
+
+  // attach to customer
+  await stripe.paymentMethods.attach(paymentMethodId, { customer: user.stripeCustomerId });
+
+  // Save to local PaymentMethodModel
+  const saved = await PaymentMethodModel.create({
+    user: userId,
+    stripePaymentMethodId: paymentMethodId,
+    brand: pm.card?.brand || pm.type,
+    last4: pm.card?.last4,
+    exp_month: pm.card?.exp_month,
+    exp_year: pm.card?.exp_year,
+    isDefault: false,
+    createdAt: new Date()
+  });
+
+  return {
+    id: saved._id,
+    stripePaymentMethodId: paymentMethodId,
+    brand: saved.brand,
+    last4: saved.last4,
+    exp_month: saved.exp_month,
+    exp_year: saved.exp_year,
+    isDefault: saved.isDefault
+  };
+}

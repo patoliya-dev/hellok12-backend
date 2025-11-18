@@ -145,6 +145,10 @@ const messageService = {
         select: 'name role',
         populate: { path: 'profileImage', select: 'url' }
       })
+      .populate({
+        path: 'attachments',
+        select: 'url name mime'
+      })
       .lean();
 
     return messages.reverse(); // Return in chronological order

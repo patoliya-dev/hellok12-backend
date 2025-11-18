@@ -9,6 +9,7 @@ export interface sendMessagePayload {
   body: string;
   sentAt: Date | string;
   type: 'text' | 'file' | 'image' | 'video' | 'audio';
+  attachments?: string[];
 }
 
 export interface markAsReadPayload {

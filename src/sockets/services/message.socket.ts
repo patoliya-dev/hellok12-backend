@@ -26,6 +26,10 @@ export const messageService = {
         .populate({
           path: 'readBy',
           select: 'name'
+        })
+        .populate({
+          path: 'attachments',
+          select: 'url name mime'
         });
 
       // Send messages to the user who opened the thread
@@ -87,6 +91,7 @@ export const messageService = {
         throw new Error('Thread not found');
       }
 
+      console.log(message.attachments);
       // Create the message in database
       const messageToSend = await messageModel.create({
         thread: message.thread,
@@ -95,7 +100,8 @@ export const messageService = {
         sentAt: message.sentAt,
         readBy: [message.sender], // Sender has already read it
         type: message.type || 'text',
-        status: 'sent'
+        status: 'sent',
+        attachments: message.attachments || []
       });
 
       // Populate sender information

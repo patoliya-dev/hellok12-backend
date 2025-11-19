@@ -1,6 +1,7 @@
 import { Server, Socket } from 'socket.io';
 import { SOCKET_EVENTS } from '../../constants/socket.constants';
 import Logger from '../../utils/winstonLogger.utils';
+import { User } from '../../models/user.model';
 
 /**
  * USER ROOM MANAGEMENT
@@ -16,7 +17,7 @@ export const userConnectionHelper = (socket: Socket, io: Server) => {
    * User connects and joins their personal room
    * This happens on socket connection
    */
-  socket.on(SOCKET_EVENTS.USER.CONNECT, (data: { userId: string }) => {
+  socket.on(SOCKET_EVENTS.USER.CONNECT, async (data: { userId: string }) => {
     try {
       const { userId } = data;
 
@@ -31,6 +32,16 @@ export const userConnectionHelper = (socket: Socket, io: Server) => {
       // Join user's personal room (user:userId)
       socket.join(`user:${userId}`);
 
+      await User.findByIdAndUpdate(userId, {
+        $set: {
+          lastSeen: new Date(),
+          availabilityStatus: 'online'
+        }
+      });
+      socket.broadcast.emit('USER_ONLINE', {
+        userId,
+        timestamp: new Date()
+      });
       // Emit connection success
       socket.emit(SOCKET_EVENTS.USER.CONNECTED, {
         userId,
@@ -45,13 +56,35 @@ export const userConnectionHelper = (socket: Socket, io: Server) => {
   /**
    * Handle disconnect - cleanup user rooms
    */
-  socket.on('disconnect', () => {
-    // Find and remove user from map
-    for (const [userId, socketId] of userSocketMap.entries()) {
-      if (socketId === socket.id) {
-        userSocketMap.delete(userId);
-        break;
+  socket.on('disconnect', async () => {
+    try {
+      let disconnectedUserId: string | null = null;
+
+      // Identify the user whose socket got disconnected
+      for (const [userId, socketId] of userSocketMap.entries()) {
+        if (socketId === socket.id) {
+          disconnectedUserId = userId;
+          userSocketMap.delete(userId);
+          break;
+        }
       }
+
+      if (disconnectedUserId) {
+        // Update user as offline in DB
+        await User.findByIdAndUpdate(disconnectedUserId, {
+          $set: {
+            lastSeen: new Date(),
+            availabilityStatus: 'offline'
+          }
+        });
+
+        socket.broadcast.emit('USER_OFFLINE', {
+          userId: disconnectedUserId,
+          timestamp: new Date()
+        });
+      }
+    } catch (error: any) {
+      Logger.error('Error on disconnect:', error);
     }
   });
 };

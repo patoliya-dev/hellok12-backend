@@ -41,7 +41,7 @@ export const messageHelper = (socket: Socket, io: Server) => {
 
       const thread: any = await messageThreadModel
         .findById(data.thread)
-        .populate('participants', '_id name')
+        .populate('participants', '_id name availabilityStatus lastSeen')
         .lean();
 
       if (thread) {

@@ -16,7 +16,7 @@ const messageService = {
       })
       .populate({
         path: 'lastMessage',
-        select: 'body sender createdAt',
+        select: 'body sender attachments createdAt',
         populate: {
           path: 'sender',
           select: 'name'
@@ -24,7 +24,7 @@ const messageService = {
       })
       .populate({
         path: 'participants',
-        select: 'name role',
+        select: 'name role lastSeen availabilityStatus',
         populate: { path: 'profileImage', select: 'url' }
       })
       .sort({ updatedAt: -1 })
@@ -41,9 +41,11 @@ const messageService = {
    * List all teachers (for new message modal)
    */
   listTeachers: async (userRole: string) => {
-    const role = userRole === 'student' ? 'teacher' : 'student';
+    const role = ['student', 'parent'].includes(userRole)
+      ? { role: 'teacher' }
+      : { role: { $in: ['student', 'parent'] } };
 
-    const teachers = await User.find({ role })
+    const teachers = await User.find(role)
       .populate('profileImage', 'url')
       .select('name email')
       .limit(50)
@@ -79,7 +81,7 @@ const messageService = {
         })
         .populate({
           path: 'participants',
-          select: 'name role',
+          select: 'name role lastSeen availabilityStatus',
           populate: { path: 'profileImage', select: 'url' }
         })
         .lean();
@@ -115,7 +117,7 @@ const messageService = {
       .populate('lastMessage', 'body sender createdAt')
       .populate({
         path: 'participants',
-        select: 'name role',
+        select: 'name role lastSeen availabilityStatus',
         populate: { path: 'profileImage', select: 'url' }
       })
       .lean();
@@ -137,12 +139,12 @@ const messageService = {
       .skip(skip)
       .populate({
         path: 'sender',
-        select: 'name role',
+        select: 'name role lastSeen availabilityStatus',
         populate: { path: 'profileImage', select: 'url' }
       })
       .populate({
         path: 'readBy',
-        select: 'name role',
+        select: 'name role lastSeen availabilityStatus',
         populate: { path: 'profileImage', select: 'url' }
       })
       .populate({

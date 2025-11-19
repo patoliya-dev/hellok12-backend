@@ -100,7 +100,8 @@ export interface IUser extends Document {
   suspensionReason?: string;
   approvedBy?: Types.ObjectId;
   approvedAt?: Date;
-
+  availabilityStatus?: 'online' | 'offline';
+  lastSeen?: Date;
   // Timestamps
   createdAt: Date;
   updatedAt: Date;
@@ -272,7 +273,18 @@ const UserSchema = new Schema<IUser>(
       type: Schema.Types.ObjectId,
       ref: 'User'
     },
-    approvedAt: Date
+    approvedAt: Date,
+
+    availabilityStatus: {
+      type: String,
+      enum: ['online', 'offline'],
+      default: 'offline'
+    },
+
+    lastSeen: {
+      type: Date,
+      default: Date.now
+    }
   },
   {
     timestamps: true,
@@ -394,6 +406,10 @@ UserSchema.pre('save', async function (next) {
     this.status = 'active';
   }
 
+  if (this.isModified('availabilityStatus') && this.availabilityStatus === 'offline') {
+    this.lastSeen = new Date();
+  }
+
   next();
 });
 
@@ -451,6 +467,14 @@ UserSchema.methods.getPublicProfile = function (): Partial<IUser> {
     },
     createdAt: this.createdAt
   };
+};
+
+UserSchema.methods.setOnlineStatus = async function (status: 'online' | 'offline') {
+  this.availabilityStatus = status;
+  if (status === 'offline') {
+    this.lastSeen = new Date();
+  }
+  await this.save();
 };
 
 UserSchema.methods.getDashboardData = function (): any {

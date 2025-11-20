@@ -6,17 +6,22 @@ import dotenv from 'dotenv';
 import morgan from 'morgan';
 import routes from './routes/index';
 import { errorHandler } from './middlewares/error';
+import http from 'http';
+import SocketManager from './sockets/socketmanager';
 
 dotenv.config();
 
-const app = express();
-
 const allowedOrigins = [
-  // 'http://localhost:5173',
+  //'http://localhost:5173',
   // 'http://localhost:3001',
   process.env.CLIENT_URL || 'https://dev-app.hellok12.com',
   'https://www.hellok12.com'
 ];
+const app = express();
+const server = http.createServer(app);
+
+const socketManager = SocketManager.getInstance();
+socketManager.initialize(server);
 
 const corsOptions: CorsOptions = {
   origin: (origin, callback) => {
@@ -50,4 +55,4 @@ app.use('/api/v1', routes);
 
 app.use(errorHandler);
 
-export default app;
+export default server;

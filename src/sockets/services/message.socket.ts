@@ -10,12 +10,40 @@ export const messageService = {
    */
   openThread: async (socket: Socket, io: Server, threadId: string, senderId: string) => {
     try {
-      // Join the socket room
-      socket.join(threadId);
+      const thread: any = await messageThreadModel
+        .findById(threadId)
+        .select('participants formerParticipants threadType')
+        .lean();
 
-      // Fetch last 30 messages with attachments
+      if (!thread) {
+        throw new Error('Thread not found');
+      }
+
+      const isCurrentParticipant = thread.participants.some(
+        (p: any) => p.toString() === senderId.toString()
+      );
+
+      const formerParticipant = thread.formerParticipants?.find(
+        (fp: any) => fp.userId.toString() === senderId.toString()
+      );
+
+      // Only current participants can join socket room
+      if (isCurrentParticipant) {
+        socket.join(threadId);
+      }
+
+      // Build message query
+      const messageQuery: any = { thread: threadId };
+
+      // If user left, only fetch messages before they left
+      if (!isCurrentParticipant && formerParticipant) {
+        messageQuery.sentAt = { $lte: formerParticipant.leftAt };
+      } else if (!isCurrentParticipant && !formerParticipant) {
+        throw new Error('You do not have access to this conversation');
+      }
+
       const messages = await messageModel
-        .find({ thread: threadId })
+        .find(messageQuery)
         .sort({ sentAt: -1 })
         .limit(30)
         .populate({
@@ -32,36 +60,28 @@ export const messageService = {
           select: 'url name mime size'
         });
 
-      // Send messages to the user who opened the thread
       socket.emit('thread-messages', messages.reverse());
 
-      // Mark all unread messages as read for this user
-      const unreadMessages = await messageModel.find({
-        thread: threadId,
-        readBy: { $ne: senderId },
-        sender: { $ne: senderId }
-      });
+      // Only mark as read if user is current participant
+      if (isCurrentParticipant) {
+        const unreadMessages = await messageModel.find({
+          thread: threadId,
+          readBy: { $ne: senderId },
+          sender: { $ne: senderId }
+        });
 
-      if (unreadMessages.length > 0) {
-        await messageModel.updateMany(
-          {
-            thread: threadId,
-            readBy: { $ne: senderId },
-            sender: { $ne: senderId }
-          },
-          { $addToSet: { readBy: senderId } }
-        );
+        if (unreadMessages.length > 0) {
+          await messageModel.updateMany(
+            {
+              thread: threadId,
+              readBy: { $ne: senderId },
+              sender: { $ne: senderId }
+            },
+            { $addToSet: { readBy: senderId } }
+          );
 
-        // Get thread to check total participants
-        const thread: any = await messageThreadModel
-          .findById(threadId)
-          .select('participants')
-          .lean();
-
-        if (thread) {
           const totalParticipants = thread.participants.length;
 
-          // Update status to 'read' for messages where all participants have read
           for (const msg of unreadMessages) {
             const message: any = await messageModel
               .findById(msg._id)
@@ -69,7 +89,6 @@ export const messageService = {
               .lean();
 
             if (message && message.readBy) {
-              // +1 because we just added the current user
               const readByCount = message.readBy.length + 1;
 
               if (readByCount >= totalParticipants) {
@@ -80,24 +99,23 @@ export const messageService = {
             }
           }
         }
+
+        await messageThreadModel.findByIdAndUpdate(threadId, {
+          [`unreadCount.${senderId}`]: 0
+        });
+
+        socket.to(threadId).emit('messagesRead', {
+          threadId,
+          userId: senderId,
+          timestamp: new Date()
+        });
       }
-
-      // Reset unread count for this user in the thread
-      await messageThreadModel.findByIdAndUpdate(threadId, {
-        [`unreadCount.${senderId}`]: 0
-      });
-
-      // Notify other users in the room that messages were read
-      socket.to(threadId).emit('messagesRead', {
-        threadId,
-        userId: senderId,
-        timestamp: new Date()
-      });
 
       return {
         threadId,
         senderId,
-        messages: messages || []
+        messages: messages || [],
+        hasLeft: !isCurrentParticipant
       };
     } catch (error) {
       Logger.error('[THREAD_OPEN] Error:', error);

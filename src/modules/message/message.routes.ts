@@ -44,4 +44,19 @@ router.get('/messages/:threadId', authenticate, messageController.getMessages);
  */
 router.post('/thread', authenticate, messageController.createThread);
 
+/**
+ * @route   POST /messages/thread/:threadId/participants
+ * @desc    Add participants to a group thread
+ * @access  Private
+ * @body    participants - Array of user IDs to add
+ */
+router.post('/thread/:threadId/participants', authenticate, messageController.addParticipants);
+
+/**
+ * @route   DELETE /messages/thread/:threadId/leave
+ * @desc    Leave a group thread
+ * @access  Private
+ */
+router.delete('/thread/:threadId/leave', authenticate, messageController.leaveGroup);
+
 export default router;

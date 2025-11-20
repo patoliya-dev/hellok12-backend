@@ -113,6 +113,7 @@ const messageController = {
   getMessages: async (req: Request, res: Response) => {
     try {
       const { threadId } = req.params;
+      const userId = req.user?.id;
       const limit = parseInt(req.query.limit as string) || 30;
       const skip = parseInt(req.query.skip as string) || 0;
 
@@ -122,7 +123,13 @@ const messageController = {
         });
       }
 
-      const messages = await messageService.getMessages(threadId, limit, skip);
+      if (!userId) {
+        return res.status(401).json({
+          message: 'Unauthorized - User ID not found'
+        });
+      }
+
+      const messages = await messageService.getMessages(threadId, userId as string, limit, skip);
 
       return res.status(200).json({
         message: 'Messages retrieved successfully',
@@ -161,6 +168,89 @@ const messageController = {
       Logger.error('Error in getUnreadCount:', error);
       return res.status(500).json({
         message: 'Error retrieving unread count',
+        error: error.message
+      });
+    }
+  },
+
+  /**
+   * Add participants to a group
+   * POST /messages/thread/:threadId/participants
+   */
+  addParticipants: async (req: Request, res: Response) => {
+    try {
+      const userId = req.user?.id;
+      const { threadId } = req.params;
+      const { participants } = req.body;
+
+      if (!userId) {
+        return res.status(401).json({
+          message: 'Unauthorized - User ID not found'
+        });
+      }
+
+      if (!threadId) {
+        return res.status(400).json({
+          message: 'Thread ID is required'
+        });
+      }
+
+      if (!participants || !Array.isArray(participants) || participants.length === 0) {
+        return res.status(400).json({
+          message: 'Participants array is required'
+        });
+      }
+
+      const updatedThread = await messageService.addParticipants(
+        threadId,
+        participants,
+        userId as string
+      );
+
+      return res.status(200).json({
+        message: 'Participants added successfully',
+        data: updatedThread
+      });
+    } catch (error: any) {
+      Logger.error('Error in addParticipants:', error);
+      return res.status(500).json({
+        message: error.message || 'Error adding participants',
+        error: error.message
+      });
+    }
+  },
+
+  /**
+   * Leave a group
+   * DELETE /messages/thread/:threadId/leave
+   */
+  leaveGroup: async (req: Request, res: Response) => {
+    try {
+      const userId = req.user?.id;
+      const { threadId } = req.params;
+
+      if (!userId) {
+        return res.status(401).json({
+          message: 'Unauthorized - User ID not found'
+        });
+      }
+
+      if (!threadId) {
+        return res.status(400).json({
+          message: 'Thread ID is required'
+        });
+      }
+
+      const result = await messageService.leaveGroup(threadId, userId as string);
+
+      return res.status(200).json({
+        message: 'Left group successfully',
+        data: result
+      });
+    } catch (error: any) {
+      Logger.error('Error in leaveGroup:', error);
+      return res.status(500).json({
+        message: error.message || 'Error leaving group',
         error: error.message
       });
     }

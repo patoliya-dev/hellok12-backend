@@ -4,7 +4,9 @@ import {
   sendMessagePayload,
   threadOpenPayload,
   markAsReadPayload,
-  typingPayload
+  typingPayload,
+  AddParticipantsPayload,
+  LeaveGroupPayload
 } from '../../types/SocketTypes';
 import Logger from '../../utils/winstonLogger.utils';
 import { messageService } from '../services/message.socket';
@@ -114,6 +116,69 @@ export const messageHelper = (socket: Socket, io: Server) => {
       socket.leave(data.threadId);
     } catch (error: any) {
       Logger.error('[CLOSE_THREAD] Error:', error);
+    }
+  });
+
+  /**
+   * Handle add participants to group
+   */
+  socket.on(SOCKET_EVENTS.CHAT.ADD_PARTICIPANTS, async (data: AddParticipantsPayload) => {
+    try {
+      const { threadId, participants, userId } = data;
+
+      // Notify all participants in the thread about new members
+      io.to(threadId).emit(SOCKET_EVENTS.CHAT.PARTICIPANTS_ADDED, {
+        threadId,
+        newParticipants: participants,
+        addedBy: userId,
+        timestamp: new Date()
+      });
+
+      // Notify the new participants to join the thread room
+      participants.forEach(participantId => {
+        io.to(`user:${participantId}`).emit(SOCKET_EVENTS.CHAT.ADDED_TO_GROUP, {
+          threadId,
+          addedBy: userId,
+          timestamp: new Date()
+        });
+      });
+    } catch (error: any) {
+      Logger.error('[ADD_PARTICIPANTS] Error:', error);
+      socket.emit(SOCKET_EVENTS.ERROR, {
+        event: 'addParticipants',
+        message: error.message || 'Failed to add participants'
+      });
+    }
+  });
+
+  /**
+   * Handle leave group
+   */
+  socket.on(SOCKET_EVENTS.CHAT.LEAVE_GROUP, async (data: LeaveGroupPayload) => {
+    try {
+      const { threadId, userId } = data;
+
+      // Leave the socket room
+      socket.leave(threadId);
+
+      // Notify remaining participants
+      socket.to(threadId).emit(SOCKET_EVENTS.CHAT.PARTICIPANT_LEFT, {
+        threadId,
+        userId,
+        timestamp: new Date()
+      });
+
+      // Notify the user who left (for their other devices/sessions)
+      io.to(`user:${userId}`).emit(SOCKET_EVENTS.CHAT.LEFT_GROUP, {
+        threadId,
+        timestamp: new Date()
+      });
+    } catch (error: any) {
+      Logger.error('[LEAVE_GROUP] Error:', error);
+      socket.emit(SOCKET_EVENTS.ERROR, {
+        event: 'leaveGroup',
+        message: error.message || 'Failed to leave group'
+      });
     }
   });
 };

@@ -32,3 +32,14 @@ export interface closeThreadPayload {
 export interface userLoginPayload {
   userId: string;
 }
+
+export interface AddParticipantsPayload {
+  threadId: string;
+  participants: string[];
+  userId: string;
+}
+
+export interface LeaveGroupPayload {
+  threadId: string;
+  userId: string;
+}

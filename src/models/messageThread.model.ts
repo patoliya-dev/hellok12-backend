@@ -12,6 +12,20 @@ const MessageThreadSchema = new Schema(
         required: true
       }
     ],
+    formerParticipants: [
+      {
+        userId: {
+          type: Schema.Types.ObjectId,
+          ref: 'User',
+          required: true
+        },
+        leftAt: {
+          type: Date,
+          required: true,
+          default: Date.now
+        }
+      }
+    ],
 
     createdBy: {
       type: Schema.Types.ObjectId,
@@ -58,6 +72,8 @@ MessageThreadSchema.index({ updatedAt: -1 });
 MessageThreadSchema.index({ groupName: 1 });
 
 MessageThreadSchema.index({ lastMessage: 1 });
+
+MessageThreadSchema.index({ 'formerParticipants.userId': 1 });
 
 export default mongoose.models.MessageThread ||
   mongoose.model('MessageThread', MessageThreadSchema);

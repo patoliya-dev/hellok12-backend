@@ -25,12 +25,18 @@ export const SOCKET_EVENTS = {
     // Emit from server
     THREAD_MESSAGES: 'thread-messages',
     NEW_MESSAGE: 'newMessage',
-    NEW_MESSAGE_NOTIFICATION: 'newMessageNotification', // 🔔 NEW: For users not in room
+    NEW_MESSAGE_NOTIFICATION: 'newMessageNotification',
     MESSAGES_READ: 'messagesRead',
     USER_TYPING: 'userTyping',
 
     // Status
     USER_ONLINE: 'userOnline',
-    USER_OFFLINE: 'userOffline'
+    USER_OFFLINE: 'userOffline',
+    ADD_PARTICIPANTS: 'addParticipants',
+    PARTICIPANTS_ADDED: 'participantsAdded',
+    ADDED_TO_GROUP: 'addedToGroup',
+    LEAVE_GROUP: 'leaveGroup',
+    PARTICIPANT_LEFT: 'participantLeft',
+    LEFT_GROUP: 'leftGroup'
   }
 };

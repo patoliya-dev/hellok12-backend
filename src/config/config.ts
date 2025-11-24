@@ -35,6 +35,9 @@ interface Config {
   CURRENCY: string;
   STRIPE_AUTO_TRANSFER?: string;
   STRIPE_API_VERSION?: string;
+  zoomAccountId: string;
+  zoomClientId: string;
+  zoomClientSecret: string;
 }
 
 // Type-safe config object
@@ -64,7 +67,10 @@ const config: Config = {
   PLATFORM_FEE_PERCENT: Number(process.env.PLATFORM_FEE_PERCENT || 0.2), // 20% default
   CURRENCY: process.env.DEFAULT_CURRENCY || 'usd',
   STRIPE_AUTO_TRANSFER: 'false',
-  STRIPE_API_VERSION: '2022-11-15'
+  STRIPE_API_VERSION: '2022-11-15',
+  zoomAccountId: process.env.ZOOM_ACCOUNT_ID || '',
+  zoomClientId: process.env.ZOOM_CLIENT_ID || '',
+  zoomClientSecret: process.env.ZOOM_CLIENT_SECRET || ''
 };
 
 export default config;

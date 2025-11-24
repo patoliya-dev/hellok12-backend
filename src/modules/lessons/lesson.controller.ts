@@ -11,6 +11,7 @@ import { CourseService } from '../courses/course.service';
 import { LessonDoc } from '../../models/lesson.model';
 import { Types } from 'mongoose';
 import { AuthenticatedRequest } from '../../middlewares/auth';
+import sessionService from '../sessions/sessions.service';
 
 export const createLesson = async (req: Request, res: Response) => {
   const parsed = lessonCreateSchema.safeParse(req.body);
@@ -27,7 +28,15 @@ export const createLesson = async (req: Request, res: Response) => {
     };
 
     const created = await LessonService.create(payload);
-    return res.status(201).json(createSuccessResponse(created, 'Created', 201));
+
+    const session = await sessionService.createSessionForLesson({
+      lessonId: created.id,
+      courseId: created.courseId as unknown as string,
+      teacherId: created.teacherId as unknown as string,
+      start: created.startAt,
+      end: created.endAt
+    });
+    return res.status(201).json(createSuccessResponse({ created, session }, 'Created', 201));
   } catch (e: any) {
     return res
       .status(500)
@@ -132,7 +141,28 @@ export const bulkCreateForCourse = async (req: Request, res: Response) => {
 
     const result = await LessonService.bulkCreateForCourse({ courseId, lessons });
 
-    return res.status(201).json(createSuccessResponse(result, 'Lessons created successfully', 201));
+    const sessions = await Promise.all(
+      result.items.map(async lesson => {
+        const session = await sessionService.createSessionForLesson({
+          lessonId: lesson._id as string,
+          courseId: lesson.courseId as unknown as string,
+          teacherId: lesson.teacherId as unknown as string,
+          start: lesson.startAt,
+          end: lesson.endAt
+        });
+
+        return session;
+      })
+    );
+
+    const resultWithSessions = result.items.map((lesson, index) => ({
+      ...lesson,
+      session: sessions[index]
+    }));
+
+    return res
+      .status(201)
+      .json(createSuccessResponse(resultWithSessions, 'Lessons created successfully', 201));
   } catch (err: any) {
     switch (err.code) {
       case '404_NOT_FOUND':

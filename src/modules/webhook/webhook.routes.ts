@@ -6,10 +6,6 @@ const router = express.Router();
 const STRIPE_WEBHOOK_SECRET = config.STRIPE_WEBHOOK_SECRET;
 
 // Use raw body parser for signature verification
-router.post(
-  '/',
-  expressRaw.raw({ type: 'application/json' }),
-  webhookController.handleStripeWebhook
-);
+router.post('/', webhookController.handleStripeWebhook);
 
 export default router;

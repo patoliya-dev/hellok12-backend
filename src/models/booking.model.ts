@@ -2,7 +2,6 @@ import mongoose, { Schema, Document } from 'mongoose';
 
 export interface IBooking extends Document {
   student: mongoose.Types.ObjectId | string;
-  teacher: mongoose.Types.ObjectId | string;
   course?: mongoose.Types.ObjectId | string;
   bookedBy?: mongoose.Types.ObjectId | string;
   location?: string;
@@ -20,7 +19,6 @@ export interface IBooking extends Document {
 
 const BookingSchema = new Schema<IBooking>({
   student: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-  teacher: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   course: { type: Schema.Types.ObjectId, ref: 'Course' },
   bookedBy: { type: Schema.Types.ObjectId, ref: 'User' },
   location: { type: String },

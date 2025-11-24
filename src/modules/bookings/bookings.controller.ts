@@ -1,8 +1,5 @@
-// src/modules/bookings/bookings.controller.ts
 import { Request, Response, NextFunction } from 'express';
-import { v4 as uuidv4 } from 'uuid';
-import BookingModel from '../../models/booking.model.ts'; // adjust path
-import { User } from '../../models/user.model';
+import BookingModel from '../../models/booking.model';
 
 // Minimal create booking: persist to Booking model then return booking
 export async function createBooking(req: Request, res: Response, next: NextFunction) {
@@ -10,10 +7,10 @@ export async function createBooking(req: Request, res: Response, next: NextFunct
     const userId = (req as any).user?.id;
     if (!userId) return res.status(401).send({ error: 'Unauthorized' });
 
-    const { classId, studentId, date, time, teacherId, amount, isTrial } = req.body;
+    const { classId, studentId, date, time, amount, isTrial } = req.body;
 
     // Basic validation
-    if (!classId || !studentId || !teacherId) {
+    if (!classId || !studentId) {
       return res.status(400).send({ error: 'Missing required fields' });
     }
 
@@ -21,7 +18,6 @@ export async function createBooking(req: Request, res: Response, next: NextFunct
 
     const bookingToCreate: any = {
       student: studentId,
-      teacher: teacherId,
       course: classId,
       bookedBy: userId,
       start: start,

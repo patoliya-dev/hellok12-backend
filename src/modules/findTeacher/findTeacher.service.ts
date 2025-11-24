@@ -1,7 +1,6 @@
 import Logger from '../../utils/winstonLogger.utils';
 import { User } from '../../models/user.model';
 import { findTeacherQuery, teacherDetailsQuery } from './findTeacher.queries';
-import { nodeModuleNameResolver } from 'typescript';
 
 export const FindTeacherService = {
   async list(filters: any, pagination: any) {

@@ -9,6 +9,8 @@ import teacherSchedulesRoutes from '../modules/teacherSchedule/schedule.routes';
 import paymentsRoutes from '../modules/payments/payment.routes';
 import bookingsRoutes from '../modules/bookings/booking.routes';
 import webhookRoutes from '../modules/webhook/webhook.routes';
+import messageRoutes from '../modules/message/message.routes';
+
 // Future imports:
 // import userRoutes from './user.routes';
 // import schoolRoutes from './school.routes';
@@ -28,7 +30,7 @@ router.use('/teachers', teacherSchedulesRoutes);
 router.use('/payments', paymentsRoutes);
 router.use('/bookings', bookingsRoutes);
 router.use('/webhook', webhookRoutes);
-
+router.use('/messages', messageRoutes);
 // Future routes:
 // router.use('/users', userRoutes);
 // router.use('/schools', schoolRoutes);

@@ -21,6 +21,23 @@ interface ZoomMeetingConfig {
   };
 }
 
+interface ZoomMeetingUpdateConfig {
+  topic?: string;
+  start_time?: string;
+  duration?: number;
+  timezone?: string;
+  agenda?: string;
+  settings?: {
+    host_video?: boolean;
+    participant_video?: boolean;
+    join_before_host?: boolean;
+    mute_upon_entry?: boolean;
+    waiting_room?: boolean;
+    audio?: 'both' | 'telephony' | 'voip';
+    auto_recording?: 'none' | 'local' | 'cloud';
+  };
+}
+
 interface ZoomMeetingResponse {
   id: number;
   uuid: string;
@@ -119,6 +136,82 @@ class ZoomService {
     } catch (error: any) {
       Logger.error('Failed to create Zoom meeting:', error.response?.data || error.message);
       throw new Error(error.response?.data?.message || 'Failed to create Zoom meeting');
+    }
+  }
+
+  /**
+   * Update an existing Zoom meeting
+   */
+  async updateMeeting(meetingId: string, config: ZoomMeetingUpdateConfig): Promise<void> {
+    try {
+      const token = await this.getAccessToken();
+
+      const updateConfig: any = {};
+
+      if (config.topic !== undefined) updateConfig.topic = config.topic;
+      if (config.start_time !== undefined) updateConfig.start_time = config.start_time;
+      if (config.duration !== undefined) updateConfig.duration = config.duration;
+      if (config.timezone !== undefined) updateConfig.timezone = config.timezone;
+      if (config.agenda !== undefined) updateConfig.agenda = config.agenda;
+      if (config.settings !== undefined) updateConfig.settings = config.settings;
+
+      await axios.patch(`https://api.zoom.us/v2/meetings/${meetingId}`, updateConfig, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      Logger.info(`Zoom meeting ${meetingId} updated successfully`);
+    } catch (error: any) {
+      Logger.error('Failed to update Zoom meeting:', error.response?.data || error.message);
+      throw new Error(error.response?.data?.message || 'Failed to update Zoom meeting');
+    }
+  }
+
+  /**
+   * Delete a Zoom meeting
+   */
+  async deleteMeeting(meetingId: string): Promise<void> {
+    try {
+      const token = await this.getAccessToken();
+
+      await axios.delete(`https://api.zoom.us/v2/meetings/${meetingId}`, {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
+
+      Logger.info(`Zoom meeting ${meetingId} deleted successfully`);
+    } catch (error: any) {
+      // If meeting not found (404), consider it already deleted
+      if (error.response?.status === 404) {
+        Logger.info(`Zoom meeting ${meetingId} not found, possibly already deleted`);
+        return;
+      }
+
+      Logger.error('Failed to delete Zoom meeting:', error.response?.data || error.message);
+      throw new Error(error.response?.data?.message || 'Failed to delete Zoom meeting');
+    }
+  }
+
+  /**
+   * Get meeting details
+   */
+  async getMeeting(meetingId: string): Promise<ZoomMeetingResponse> {
+    try {
+      const token = await this.getAccessToken();
+
+      const response = await axios.get(`https://api.zoom.us/v2/meetings/${meetingId}`, {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
+
+      return response.data;
+    } catch (error: any) {
+      Logger.error('Failed to get Zoom meeting:', error.response?.data || error.message);
+      throw new Error(error.response?.data?.message || 'Failed to get Zoom meeting');
     }
   }
 

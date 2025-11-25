@@ -10,6 +10,8 @@ import paymentsRoutes from '../modules/payments/payment.routes';
 import bookingsRoutes from '../modules/bookings/booking.routes';
 import webhookRoutes from '../modules/webhook/webhook.routes';
 import messageRoutes from '../modules/message/message.routes';
+import feedbackRatingRoutes from '../modules/feedbacks/feedbacks.routes';
+import dashboardRoutes from '../modules/dashboards/dashboards.routes';
 
 // Future imports:
 // import userRoutes from './user.routes';
@@ -31,6 +33,9 @@ router.use('/payments', paymentsRoutes);
 router.use('/bookings', bookingsRoutes);
 router.use('/webhook', webhookRoutes);
 router.use('/messages', messageRoutes);
+router.use('/feedbacks', feedbackRatingRoutes);
+router.use('/teachers/dashboard', dashboardRoutes);
+
 // Future routes:
 // router.use('/users', userRoutes);
 // router.use('/schools', schoolRoutes);

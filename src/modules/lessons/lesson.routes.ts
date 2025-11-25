@@ -53,13 +53,4 @@ r.get(
   ctrl.getLessonStats
 );
 
-r.get('/:id', authenticate, authorize([USER_ROLES.SCHOOL, USER_ROLES.TEACHER]), ctrl.getLessonById);
-
-r.patch(
-  '/:id/status',
-  authenticate,
-  authorize([USER_ROLES.SCHOOL, USER_ROLES.TEACHER]),
-  ctrl.updateLessonStatus
-);
-
 export default r;

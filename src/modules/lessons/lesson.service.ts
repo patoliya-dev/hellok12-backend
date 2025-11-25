@@ -4,6 +4,15 @@ import { FilterQuery, Types } from 'mongoose';
 import { LessonItemInput } from './lesson.schemas';
 import { normalizeToHHMM24, parseStartEnd } from './lesson.util';
 import { SessionModel, SessionStatus } from '../../models/sessions.model';
+import {
+  addPaginationToPipeline,
+  addSortToPipeline,
+  buildBaseFilter,
+  buildLessonsPipeline,
+  getPendingCount,
+  getTotalCount
+} from './lesson.queries';
+import { transformSessionToLesson } from './lesson.helper';
 
 interface GetLessonsQuery {
   teacherId: string;
@@ -11,7 +20,7 @@ interface GetLessonsQuery {
   endDate?: string;
   status?: SessionStatus | 'all';
   studentName?: string;
-  sortBy?: 'date' | 'student' | 'status';
+  sortBy?: 'date' | 'student' | 'status' | 'subject';
   sortOrder?: 'asc' | 'desc';
   page?: number;
   limit?: number;
@@ -666,190 +675,42 @@ export const LessonService = {
     return { items: refreshed, count: refreshed.length };
   },
 
-  async getLessons(query: GetLessonsQuery): Promise<PaginatedResponse> {
+  getLessons: async (query: GetLessonsQuery) => {
     const {
       teacherId,
       startDate,
       endDate,
       status,
       studentName,
-      sortBy = 'date',
+      sortBy = 'dateTime',
       sortOrder = 'desc',
       page = 1,
       limit = 10
     } = query;
 
-    // Build filter object
-    const filter: any = {
-      teacher: new Types.ObjectId(teacherId)
-    };
-
-    // Date range filter
-    if (startDate || endDate) {
-      filter.start = {};
-      if (startDate) {
-        filter.start.$gte = new Date(startDate);
-      }
-      if (endDate) {
-        filter.start.$lte = new Date(endDate);
-      }
-    }
-
-    // Status filter
-    if (status && status !== 'all') {
-      filter.status = status;
-    }
+    // Build base filter
+    const filter = buildBaseFilter(teacherId, startDate, endDate, status);
 
     // Build aggregation pipeline
-    const pipeline: any[] = [
-      { $match: filter },
+    const pipeline = buildLessonsPipeline(filter, studentName);
 
-      // Populate course
-      {
-        $lookup: {
-          from: 'courses',
-          localField: 'course',
-          foreignField: '_id',
-          as: 'courseData'
-        }
-      },
-      { $unwind: '$courseData' },
+    // Add sorting
+    addSortToPipeline(pipeline, sortBy, sortOrder);
 
-      // Populate students
-      {
-        $lookup: {
-          from: 'users',
-          localField: 'students',
-          foreignField: '_id',
-          as: 'studentData'
-        }
-      },
+    // Get total count
+    const total = await getTotalCount(pipeline);
 
-      // Populate lesson for duration
-      {
-        $lookup: {
-          from: 'lessons',
-          localField: 'lesson',
-          foreignField: '_id',
-          as: 'lessonData'
-        }
-      },
-      { $unwind: '$lessonData' }
-    ];
-
-    // Student name filter (case-insensitive search)
-    if (studentName && studentName.trim() !== '') {
-      pipeline.push({
-        $match: {
-          'studentData.firstName': {
-            $regex: studentName.trim(),
-            $options: 'i'
-          }
-        }
-      });
-    }
-
-    // Project fields
-    pipeline.push({
-      $project: {
-        _id: 1,
-        start: 1,
-        end: 1,
-        status: 1,
-        studentData: {
-          _id: 1,
-          firstName: 1,
-          lastName: 1,
-          dateOfBirth: 1
-        },
-        courseType: '$courseData.lessonType',
-        courseName: '$courseData.title',
-        courseMode: '$courseData.mode',
-        courseLanguage: '$courseData.language',
-        duration: '$lessonData.schedule.duration'
-      }
-    });
-
-    // Sorting
-    const sortConfig: any = {};
-    switch (sortBy) {
-      case 'date':
-        sortConfig.start = sortOrder === 'asc' ? 1 : -1;
-        break;
-      case 'student':
-        sortConfig['studentData.firstName'] = sortOrder === 'asc' ? 1 : -1;
-        break;
-      case 'status':
-        sortConfig.status = sortOrder === 'asc' ? 1 : -1;
-        sortConfig.start = -1; // Secondary sort by date
-        break;
-      default:
-        sortConfig.start = -1;
-    }
-    pipeline.push({ $sort: sortConfig });
-
-    // Get total count before pagination
-    const countPipeline = [...pipeline, { $count: 'total' }];
-    const countResult = await SessionModel.aggregate(countPipeline);
-    const total = countResult[0]?.total || 0;
-
-    // Pagination
-    const skip = (page - 1) * limit;
-    pipeline.push({ $skip: skip }, { $limit: limit });
+    // Add pagination
+    addPaginationToPipeline(pipeline, page, limit);
 
     // Execute aggregation
     const sessions = await SessionModel.aggregate(pipeline);
 
     // Get pending count
-    const pendingCount = await SessionModel.countDocuments({
-      teacher: new Types.ObjectId(teacherId),
-      status: SessionStatus.SCHEDULED
-    });
+    const pendingCount = await getPendingCount(teacherId);
 
     // Transform data
-    const lessons: LessonResponse[] = sessions.map(session => {
-      const calculateAge = (dob: Date): number => {
-        const today = new Date();
-        const birthDate = new Date(dob);
-        let age = today.getFullYear() - birthDate.getFullYear();
-        const monthDiff = today.getMonth() - birthDate.getMonth();
-        if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
-          age--;
-        }
-        return age;
-      };
-
-      const formatStudent = (student: any) => ({
-        _id: student?._id.toString(),
-        name: student?.name,
-        age: student?.dateOfBirth ? calculateAge(student?.dateOfBirth) : 0
-      });
-
-      const studentInfo =
-        session.courseType === 'group'
-          ? session.studentData.map(formatStudent)
-          : formatStudent(session.studentData[0]);
-
-      return {
-        _id: session._id.toString(),
-        dateTime: {
-          date: session.start.toISOString().split('T')[0],
-          time: new Date(session.start).toLocaleTimeString('en-US', {
-            hour: 'numeric',
-            minute: '2-digit',
-            hour12: true
-          })
-        },
-        student: studentInfo,
-        courseType: session.courseType,
-        subject: {
-          name: `${session.courseLanguage} ${session.courseName}`,
-          mode: session.courseMode
-        },
-        duration: session.duration,
-        status: session.status
-      };
-    });
+    const lessons = sessions.map(session => transformSessionToLesson(session));
 
     return {
       lessons,
@@ -861,42 +722,5 @@ export const LessonService = {
       },
       pendingCount
     };
-  },
-
-  async getLessonById(lessonId: string, teacherId: string): Promise<LessonResponse | null> {
-    const session = await SessionModel.findOne({
-      _id: new Types.ObjectId(lessonId),
-      teacher: new Types.ObjectId(teacherId)
-    })
-      .populate('course')
-      .populate('students')
-      .populate('lesson')
-      .lean();
-
-    if (!session) {
-      return null;
-    }
-
-    // Transform similar to above
-    // (Implementation similar to the map function above)
-    return null; // Implement transformation as needed
-  },
-
-  async updateLessonStatus(
-    lessonId: string,
-    teacherId: string,
-    status: SessionStatus
-  ): Promise<boolean> {
-    const result = await SessionModel.updateOne(
-      {
-        _id: new Types.ObjectId(lessonId),
-        teacher: new Types.ObjectId(teacherId)
-      },
-      {
-        $set: { status, updatedAt: new Date() }
-      }
-    );
-
-    return result.modifiedCount > 0;
   }
 };

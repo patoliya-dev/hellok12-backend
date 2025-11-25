@@ -480,7 +480,8 @@ export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
       pipeline: [
         {
           $match: {
-            $expr: { $in: ['$$teacherId', { $ifNull: ['$teachers', []] }] }
+            $expr: { $in: ['$$teacherId', { $ifNull: ['$teachers', []] }] },
+            status: 'active'
           }
         },
         {
@@ -511,7 +512,8 @@ export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
       pipeline: [
         {
           $match: {
-            $expr: { $in: ['$$teacherId', { $ifNull: ['$teachers', []] }] }
+            $expr: { $in: ['$$teacherId', { $ifNull: ['$teachers', []] }] },
+            status: 'active'
           }
         },
         {

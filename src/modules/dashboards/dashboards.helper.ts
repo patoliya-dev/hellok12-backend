@@ -28,21 +28,21 @@ export const getUpcomingSessions = async (
     SessionModel.countDocuments({
       teacher: new Types.ObjectId(teacherId),
       start: { $gte: now },
-      status: { $in: ['SCHEDULED', 'CONFIRMED'] }
+      status: { $in: ['SCHEDULED'] }
     }),
 
     // This week's sessions
     SessionModel.countDocuments({
       teacher: new Types.ObjectId(teacherId),
       start: { $gte: startOfWeek, $lt: endOfWeek },
-      status: { $in: ['SCHEDULED', 'CONFIRMED'] }
+      status: { $in: ['SCHEDULED'] }
     }),
 
     // Last week's sessions (same time period)
     SessionModel.countDocuments({
       teacher: new Types.ObjectId(teacherId),
       start: { $gte: startOfLastWeek, $lt: startOfWeek },
-      status: { $in: ['SCHEDULED', 'CONFIRMED'] }
+      status: { $in: ['SCHEDULED'] }
     })
   ]);
 

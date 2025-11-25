@@ -232,11 +232,6 @@ export const getLessonsDashboard = async (req: AuthenticatedRequest, res: Respon
   }
 };
 
-/**
- * GET /api/lessons/calendar
- * Combined endpoint - fetches everything for initial page load
- * Query: month, year, date (optional selected date)
- */
 export async function getCalendarOverview(req: Request, res: Response) {
   try {
     const { month, year } = req.query;
@@ -355,8 +350,7 @@ export const getLessons = async (req: Request, res: Response) => {
         message: `Invalid status. Must be one of: ${validStatuses.join(', ')}`
       });
     }
-    console.log(sortBy, 'sortBy');
-    const validSortBy = ['dateTime', 'student', 'status'];
+    const validSortBy = ['dateTime', 'student', 'status', 'subject'];
     if (sortBy && !validSortBy.includes(sortBy as string)) {
       return res.status(400).json({
         success: false,
@@ -398,97 +392,8 @@ export const getLessons = async (req: Request, res: Response) => {
       data: result
     });
   } catch (error) {
-    console.log(error);
     return res
       .status(500)
       .json(createErrorResponse('Error in getLessons', 'Internal Server Error', 500));
-  }
-};
-
-export const getLessonById = async (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-    const teacherId = req.user?.id;
-
-    if (!teacherId) {
-      return res.status(401).json({
-        success: false,
-        message: 'Unauthorized: Teacher ID not found'
-      });
-    }
-
-    if (!id) {
-      return res.status(400).json({
-        success: false,
-        message: 'Lesson ID is required'
-      });
-    }
-
-    const lesson = await LessonService.getLessonById(id, teacherId);
-
-    if (!lesson) {
-      return res.status(404).json({
-        success: false,
-        message: 'Lesson not found or you do not have permission to view it'
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      data: lesson
-    });
-  } catch (error) {
-    return res
-      .status(500)
-      .json(createErrorResponse('Error in getLessonById', 'Internal Server Error', 500));
-  }
-};
-
-export const updateLessonStatus = async (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-    const { status } = req.body;
-    const teacherId = req.user?.id;
-
-    if (!id) {
-      return res.status(400).json({
-        success: false,
-        message: 'Lesson ID is required'
-      });
-    }
-
-    if (!status) {
-      return res.status(400).json({
-        success: false,
-        message: 'Status is required'
-      });
-    }
-
-    // Validate status
-    const validStatuses = Object.values(SessionStatus);
-    if (!validStatuses.includes(status)) {
-      return res.status(400).json({
-        success: false,
-        message: `Invalid status. Must be one of: ${validStatuses.join(', ')}`
-      });
-    }
-
-    const updated = await LessonService.updateLessonStatus(id, teacherId as string, status);
-
-    if (!updated) {
-      return res.status(404).json({
-        success: false,
-        message: 'Lesson not found or you do not have permission to update it'
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: 'Lesson status updated successfully'
-    });
-  } catch (error) {
-    return res
-      .status(500)
-      .json(createErrorResponse('Error in updateLessonStatus', 'Internal Server Error', 500));
   }
 };

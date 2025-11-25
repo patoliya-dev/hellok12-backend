@@ -141,7 +141,23 @@ export async function createPaymentIntent(req: Request, res: Response, next: Nex
       courseId: payload.courseId,
       courseTitle: payload.courseTitle
     });
-    res.json({ success: true, client_secret: pi.client_secret, paymentIntentId: pi.id });
+
+    // Attempt to find server-side Transaction created at PI creation time
+    let transactionId = null;
+    try {
+      const tx = await TransactionModel.findOne({ stripePaymentIntentId: pi.id }).lean();
+      if (tx) transactionId = tx._id;
+    } catch (err) {
+      // ignore - this is optional for the client
+      console.warn('Could not locate transaction for paymentIntent', err);
+    }
+
+    res.json({
+      success: true,
+      client_secret: pi.client_secret,
+      paymentIntentId: pi.id,
+      transactionId
+    });
   } catch (err) {
     next(err);
   }
@@ -193,7 +209,7 @@ export async function listTransactions(req: Request, res: Response, next: NextFu
         : t.metadata?.paymentMethod
           ? t.metadata.paymentMethod
           : null,
-      reference: t.reference || t.stripePaymentIntentId || String(t._id),
+      reference: t.stripePaymentIntentId || String(t._id),
       downloadUrl: t.downloadUrl || null,
       invoiceId: t.stripeInvoiceId || null,
       bookingId: t.booking || null,

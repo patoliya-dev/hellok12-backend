@@ -29,6 +29,9 @@ interface Config {
     S3_ASSETS_PUBLIC_BASE: string;
     S3_MAX_UPLOAD_MB: number;
   };
+  zoomAccountId: string;
+  zoomClientId: string;
+  zoomClientSecret: string;
 }
 
 // Type-safe config object
@@ -52,7 +55,10 @@ const config: Config = {
     S3_ASSET_BUCKET: process.env.S3_ASSET_BUCKET || 'hellok12-assets-dev',
     S3_ASSETS_PUBLIC_BASE: `https://${process.env.S3_ASSET_BUCKET || 'hellok12-assets-dev'}.s3.us-east-1.amazonaws.com`,
     S3_MAX_UPLOAD_MB: 5
-  }
+  },
+  zoomAccountId: process.env.ZOOM_ACCOUNT_ID || '',
+  zoomClientId: process.env.ZOOM_CLIENT_ID || '',
+  zoomClientSecret: process.env.ZOOM_CLIENT_SECRET || ''
 };
 
 export default config;

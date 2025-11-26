@@ -1,4 +1,4 @@
-import { FilterQuery, Types } from 'mongoose';
+import { FilterQuery, Types, UpdateQuery } from 'mongoose';
 import { Course, CourseDoc } from '../../models/course.model';
 import { Lesson } from '../../models/lesson.model';
 import { CourseCreateDTO, CourseUpdateDTO } from './course.schemas';
@@ -10,7 +10,7 @@ export const CourseService = {
     const payload: Partial<CourseDoc> = {
       title: data.title,
       description: data.description ?? '',
-      language: data.language,
+      languageCode: data.languageCode ?? '',
       lessonType: data.lessonType,
       studentCapacity: data.studentCapacity ?? 1,
       mode: data.mode,
@@ -30,12 +30,7 @@ export const CourseService = {
       isTrialAvailable: false,
       enrolledCount: 0
     };
-    // const payload: Partial<CourseDoc> = {
-    //   ...data,
-    //   ownerType: owner.role,
-    //   ownerId: new Types.ObjectId(owner.id),
-    //   isTrialAvailable: false
-    // };
+
     const doc = await Course.create(payload);
     return doc.toObject();
   },
@@ -45,18 +40,16 @@ export const CourseService = {
     data: CourseUpdateDTO,
     owner?: { role: 'school' | 'teacher'; id: string }
   ) {
-    // ownership check (if provided from route-level guard)
     const filter: FilterQuery<CourseDoc> = { _id: id };
     if (owner) {
       filter.ownerType = owner.role;
       filter.ownerId = new Types.ObjectId(owner.id);
     }
-
-    const doc = await Course.findOneAndUpdate(
-      filter,
-      { $set: data },
-      { new: true, runValidators: true }
-    ).lean();
+    const updateQuery: UpdateQuery<CourseDoc> = { $set: data };
+    const doc = await Course.findOneAndUpdate(filter, updateQuery, {
+      new: true,
+      runValidators: true
+    }).lean();
     return doc;
   },
 
@@ -175,8 +168,8 @@ export const CourseService = {
       newest: { createdAt: -1, _id: 1 },
       titleAsc: { title: 1, _id: 1 },
       titleDesc: { title: -1, _id: 1 },
-      languageAsc: { language: 1, _id: 1 },
-      languageDesc: { language: -1, _id: 1 },
+      languageCodeAsc: { languageCode: 1, _id: 1 },
+      languageCodeDesc: { languageCode: -1, _id: 1 },
       studentsAsc: { enrolledCount: 1, _id: 1 },
       studentsDesc: { enrolledCount: -1, _id: 1 },
       priceAsc: { price: 1, _id: 1 },

@@ -14,10 +14,7 @@ dotenv.config();
 const allowedOrigins = [
   //'http://localhost:5173',
   // 'http://localhost:3001',
-  process.env.CLIENT_URL || 'https://dev-app.hellok12.com',
-  'https://www.hellok12.com',
-  'https://055c070454d7.ngrok-free.app',
-  'https://limply-unsocialised-joline.ngrok-free.dev'
+  process.env.CLIENT_URL || 'https://dev-app.hellok12.com'
 ];
 const app = express();
 const server = http.createServer(app);

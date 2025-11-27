@@ -350,13 +350,21 @@ export const LessonService = {
     end.setHours(23, 59, 59, 999);
 
     const lessons = await SessionModel.find({ teacher: userId, start: { $gte: start, $lt: end } })
-      .populate('lesson', 'title _id schedule status startAt endAt')
+      .populate({
+        path: 'lesson',
+        select: 'title _id schedule status startAt endAt description isTrialAvailable',
+        populate: {
+          path: 'teacherId',
+          select: 'name _id',
+          populate: { path: 'profileImage', select: 'url' }
+        }
+      })
       .populate({
         path: 'course',
-        select: 'title _id mode',
+        select: 'title _id mode description lessonType',
         populate: { path: 'introImageRef', select: 'url' }
       })
-      .select('joinUrl')
+      .select('joinUrl status')
       .lean();
 
     return lessons;

@@ -173,7 +173,7 @@ export const getMonthlyEarnings = async (
       {
         $group: {
           _id: null,
-          totalAmount: { $sum: '$amount' },
+          totalAmount: { $sum: '$netAmount' },
           currency: { $first: '$currency' }
         }
       }
@@ -194,7 +194,7 @@ export const getMonthlyEarnings = async (
       {
         $group: {
           _id: null,
-          totalAmount: { $sum: '$amount' }
+          totalAmount: { $sum: '$netAmount' }
         }
       }
     ])

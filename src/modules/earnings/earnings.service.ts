@@ -403,7 +403,7 @@ export const EarningsService = {
         '0-50': { min: 0, max: 5000 },
         '50-100': { min: 5000, max: 10000 },
         '100-200': { min: 10000, max: 15000 },
-        '200+': { min: 15000, max: 20000 }
+        '200+': { min: 20000, max: Number.MAX_SAFE_INTEGER }
       };
       if (minAmount === '200' && !maxAmount) {
         filter.amount = { $gte: ranges['200+'].min };

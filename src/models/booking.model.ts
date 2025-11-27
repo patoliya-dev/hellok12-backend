@@ -2,9 +2,9 @@ import mongoose, { Schema, Document } from 'mongoose';
 
 export interface IBooking extends Document {
   student: mongoose.Types.ObjectId | string;
-  // teacher: mongoose.Types.ObjectId | string;
   course?: mongoose.Types.ObjectId | string;
   bookedBy?: mongoose.Types.ObjectId | string;
+  lesson?: mongoose.Types.ObjectId | string;
   location?: string;
   start?: Date;
   end?: Date;
@@ -17,11 +17,12 @@ export interface IBooking extends Document {
   createdAt?: Date;
   updatedAt?: Date;
 }
+
 const BookingSchema = new Schema<IBooking>({
   student: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-  // teacher: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   course: { type: Schema.Types.ObjectId, ref: 'Course' },
   bookedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  lesson: { type: Schema.Types.ObjectId, ref: 'Lesson' },
   location: { type: String },
   start: { type: Date },
   end: { type: Date },
@@ -49,4 +50,5 @@ BookingSchema.pre('save', function (next) {
   (this as any).updatedAt = new Date();
   next();
 });
+
 export default mongoose.model<IBooking>('Booking', BookingSchema);

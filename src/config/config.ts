@@ -29,6 +29,12 @@ interface Config {
     S3_ASSETS_PUBLIC_BASE: string;
     S3_MAX_UPLOAD_MB: number;
   };
+  STRIPE_SECRET_KEY: string;
+  STRIPE_WEBHOOK_SECRET: string;
+  PLATFORM_FEE_PERCENT: number;
+  CURRENCY: string;
+  STRIPE_AUTO_TRANSFER?: string;
+  STRIPE_API_VERSION?: string;
   zoomAccountId: string;
   zoomClientId: string;
   zoomClientSecret: string;
@@ -56,6 +62,12 @@ const config: Config = {
     S3_ASSETS_PUBLIC_BASE: `https://${process.env.S3_ASSET_BUCKET || 'hellok12-assets-dev'}.s3.us-east-1.amazonaws.com`,
     S3_MAX_UPLOAD_MB: 5
   },
+  STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY || '',
+  STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET || '',
+  PLATFORM_FEE_PERCENT: Number(process.env.PLATFORM_FEE_PERCENT || 0.2), // 20% default
+  CURRENCY: process.env.DEFAULT_CURRENCY || 'usd',
+  STRIPE_AUTO_TRANSFER: 'false',
+  STRIPE_API_VERSION: '2022-11-15',
   zoomAccountId: process.env.ZOOM_ACCOUNT_ID || '',
   zoomClientId: process.env.ZOOM_CLIENT_ID || '',
   zoomClientSecret: process.env.ZOOM_CLIENT_SECRET || ''

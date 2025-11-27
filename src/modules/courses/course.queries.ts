@@ -1,14 +1,16 @@
 import mongoose from 'mongoose';
 
 export const getCourseDetails = (id: string) => {
-  const pipeline = [];
+  const pipeline: any[] = [];
 
+  // match the course
   pipeline.push({
     $match: {
       _id: new mongoose.Types.ObjectId(id)
     }
   });
 
+  // lookup teachers
   pipeline.push({
     $lookup: {
       from: 'users',
@@ -19,6 +21,7 @@ export const getCourseDetails = (id: string) => {
     }
   });
 
+  // lookup intro image attachment
   pipeline.push({
     $lookup: {
       from: 'attachments',
@@ -35,6 +38,7 @@ export const getCourseDetails = (id: string) => {
     }
   });
 
+  // full lessons array
   pipeline.push({
     $lookup: {
       from: 'lessons',
@@ -44,6 +48,7 @@ export const getCourseDetails = (id: string) => {
     }
   });
 
+  // feedbacks & rating
   pipeline.push({
     $lookup: {
       from: 'feedbackratings',
@@ -62,6 +67,59 @@ export const getCourseDetails = (id: string) => {
     }
   });
 
+  // Lookup the next upcoming lesson (first startAt >= now)
+  pipeline.push({
+    $lookup: {
+      from: 'lessons',
+      let: { courseId: '$_id' },
+      pipeline: [
+        {
+          $match: {
+            $expr: {
+              $and: [
+                { $eq: ['$courseId', '$$courseId'] },
+                { $eq: ['$status', 'active'] },
+                { $gte: ['$startAt', '$$NOW'] } // upcoming only
+              ]
+            }
+          }
+        },
+        { $sort: { startAt: 1 } }, // earliest first
+        { $limit: 1 },
+        {
+          $project: {
+            _id: 1,
+            title: 1,
+            description: 1,
+            schedule: 1,
+            startAt: 1,
+            endAt: 1,
+            teacherId: 1,
+            isTrialAvailable: 1,
+            trialCapacity: 1,
+            order: 1
+          }
+        }
+      ],
+      as: 'nextLesson'
+    }
+  });
+
+  // unwrap nextLesson array to object and expose nextLessonDate
+  pipeline.push({
+    $addFields: {
+      nextLesson: { $arrayElemAt: ['$nextLesson', 0] },
+      nextLessonDate: {
+        $cond: [
+          { $gt: [{ $size: '$nextLesson' }, 0] },
+          { $arrayElemAt: ['$nextLesson.startAt', 0] },
+          null
+        ]
+      }
+    }
+  });
+
+  // final projection
   pipeline.push({
     $project: {
       _id: 1,
@@ -78,7 +136,9 @@ export const getCourseDetails = (id: string) => {
       reviewsCount: 1,
       teachers: 1,
       lessonType: 1,
-      mode: 1
+      mode: 1,
+      nextLesson: 1,
+      nextLessonDate: 1
     }
   });
 

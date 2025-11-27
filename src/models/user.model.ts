@@ -100,6 +100,12 @@ export interface IUser extends Document {
   suspensionReason?: string;
   approvedBy?: Types.ObjectId;
   approvedAt?: Date;
+
+  // Stripe / Payments
+  stripeCustomerId?: string;
+  stripeAccountId?: string;
+  stripeOnboardingComplete?: boolean;
+
   availabilityStatus?: 'online' | 'offline';
   lastSeen?: Date;
   // Timestamps
@@ -266,6 +272,9 @@ const UserSchema = new Schema<IUser>(
         return this.role === 'student' && this.parent ? 'active' : 'pending';
       }
     },
+    stripeCustomerId: { type: String, default: null },
+    stripeAccountId: { type: String, default: null }, // connected account id for teachers
+    stripeOnboardingComplete: { type: Boolean, default: false },
 
     suspendedAt: Date,
     suspensionReason: String,

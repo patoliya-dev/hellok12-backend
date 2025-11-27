@@ -4,7 +4,7 @@ import { AGE_GROUPS, CourseMode, LessonType } from '../utils/constants';
 export interface CourseDoc extends Document {
   title: string;
   description?: string;
-  language: string; // e.g. "en", "es"
+  languageCode?: string; // e.g. "ja" - ISO stored for UI
   lessonType: LessonType;
   studentCapacity: number;
   mode: CourseMode;
@@ -35,7 +35,7 @@ const CourseSchema = new Schema<CourseDoc>(
   {
     title: { type: String, required: true, trim: true },
     description: { type: String, default: '' },
-    language: { type: String, required: true },
+    languageCode: { type: String, index: true, default: null },
     lessonType: { type: String, enum: ['1-on-1', 'group'], required: true },
     studentCapacity: { type: Number, min: 1, default: 1 },
     mode: { type: String, enum: ['online', 'in-person'], required: true },

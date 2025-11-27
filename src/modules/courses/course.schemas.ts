@@ -5,7 +5,7 @@ export const courseCreateSchema = z
   .object({
     title: z.string().min(2).max(160),
     description: z.string().max(4000).optional(),
-    language: z.string().min(2).max(10),
+    languageCode: z.string().min(2).max(10).optional(),
     lessonType: z.enum([LESSON_TYPES.ONE_ON_ONE, LESSON_TYPES.GROUP]),
     studentCapacity: z.coerce.number().int().min(1),
     mode: z.enum([COURSE_MODE.ONLINE, COURSE_MODE.IN_PERSON]),
@@ -29,7 +29,7 @@ export const courseUpdateSchema = z
   .object({
     title: z.string().min(2).max(160).optional(),
     description: z.string().max(4000).optional(),
-    language: z.string().min(2).max(10).optional(),
+    languageCode: z.string().min(2).max(10).optional(),
     lessonType: z.enum([LESSON_TYPES.ONE_ON_ONE, LESSON_TYPES.GROUP]).optional(),
     studentCapacity: z.coerce.number().int().min(1).optional(),
     mode: z.enum([COURSE_MODE.ONLINE, COURSE_MODE.IN_PERSON]).optional(),
@@ -72,8 +72,8 @@ export const listQuerySchema = z.object({
       'newest',
       'titleAsc',
       'titleDesc',
-      'languageAsc',
-      'languageDesc',
+      'languageCodeAsc',
+      'languageCodeDesc',
       'studentsAsc',
       'studentsDesc',
       'priceAsc',

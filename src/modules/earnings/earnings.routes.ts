@@ -15,47 +15,25 @@ router.get(
 );
 
 router.get(
-  '/breakdown',
-  authenticate,
-  authorize([USER_ROLES.TEACHER, USER_ROLES.SCHOOL]),
-  EarningsController.getBreakdown
-);
-
-router.get(
-  '/custom',
-  authenticate,
-  authorize([USER_ROLES.TEACHER, USER_ROLES.SCHOOL]),
-  EarningsController.getCustomRange
-);
-router.get(
   '/trend',
   authenticate,
   authorize([USER_ROLES.TEACHER, USER_ROLES.SCHOOL]),
   EarningsController.getTrend
 );
 
-/**
- * @route   GET /api/payouts
- * @desc    List payouts with filters and pagination
- * @access  Private
- * @query   {
- *   lessonType?: '1-on-1' | 'group',
- *   paymentStatus?: 'PENDING' | 'SENT' | 'FAILED' | 'SETTLED',
- *   amountRange?: '0-50' | '50-100' | '100-150' | '150-200',
- *   startDate?: string,
- *   endDate?: string,
- *   page?: number,
- *   limit?: number,
- *   sortBy?: string,
- *   sortOrder?: 'asc' | 'desc'
- * }
- */
 router.get(
   '/list',
   authenticate,
   authorize([USER_ROLES.TEACHER, USER_ROLES.SCHOOL]),
   validatePayoutQuery,
   EarningsController.listPayouts
+);
+
+router.get(
+  '/earnings-commission',
+  authenticate,
+  authorize([USER_ROLES.TEACHER, USER_ROLES.SCHOOL]),
+  EarningsController.getPayoutAfterCommission
 );
 
 export default router;

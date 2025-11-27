@@ -162,13 +162,12 @@ export const getMonthlyEarnings = async (
     PayoutModel.aggregate([
       {
         $match: {
-          recipient: new Types.ObjectId(teacherId),
-          recipientType: 'TEACHER',
+          'metadata.raw.payoutReceiverId': teacherId,
           status: { $in: ['PAID', 'PROCESSING', 'PENDING'] },
-          $or: [
-            { periodStart: { $gte: startOfMonth, $lte: endOfMonth } },
-            { periodEnd: { $gte: startOfMonth, $lte: endOfMonth } }
-          ]
+          createdAt: {
+            $gte: startOfMonth,
+            $lte: endOfMonth
+          }
         }
       },
       {
@@ -184,13 +183,12 @@ export const getMonthlyEarnings = async (
     PayoutModel.aggregate([
       {
         $match: {
-          recipient: new Types.ObjectId(teacherId),
-          recipientType: 'TEACHER',
+          'metadata.raw.payoutReceiverId': teacherId,
           status: { $in: ['PAID', 'PROCESSING', 'PENDING'] },
-          $or: [
-            { periodStart: { $gte: startOfLastMonth, $lte: endOfLastMonth } },
-            { periodEnd: { $gte: startOfLastMonth, $lte: endOfLastMonth } }
-          ]
+          createdAt: {
+            $gte: startOfLastMonth,
+            $lte: endOfLastMonth
+          }
         }
       },
       {
@@ -202,8 +200,8 @@ export const getMonthlyEarnings = async (
     ])
   ]);
 
-  const currentAmount = currentMonthPayouts[0]?.totalAmount || 0;
-  const lastAmount = lastMonthPayouts[0]?.totalAmount || 0;
+  const currentAmount = currentMonthPayouts[0]?.totalAmount / 100 || 0;
+  const lastAmount = lastMonthPayouts[0]?.totalAmount / 100 || 0;
   const currency = currentMonthPayouts[0]?.currency || 'USD';
 
   // Calculate percentage change

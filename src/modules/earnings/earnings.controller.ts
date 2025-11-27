@@ -4,7 +4,6 @@ import PayoutModel from '../../models/payout.model';
 import payoutModel from '../../models/payout.model';
 
 export const EarningsController = {
-  // Get earnings summary
   getSummary: async (req: Request, res: Response) => {
     try {
       const userId = req.user?.id as string;
@@ -24,107 +23,6 @@ export const EarningsController = {
     }
   },
 
-  // Get earnings breakdown for a specific period
-  getBreakdown: async (req: any, res: any) => {
-    try {
-      const userId = req.user._id;
-      const { Payout } = req.models;
-      const { period = 'month' } = req.query;
-
-      const ranges = EarningsService.getDateRanges();
-      let startDate: Date, endDate: Date;
-
-      switch (period) {
-        case 'week':
-          startDate = ranges.thisWeek.startDate;
-          endDate = ranges.thisWeek.endDate;
-          break;
-        case 'month':
-          startDate = ranges.thisMonth.startDate;
-          endDate = ranges.thisMonth.endDate;
-          break;
-        case 'year':
-          startDate = ranges.thisYear.startDate;
-          endDate = ranges.thisYear.endDate;
-          break;
-        default:
-          return res.status(400).json({
-            success: false,
-            message: 'Invalid period. Must be week, month, or year'
-          });
-      }
-
-      const breakdown = await EarningsService.getEarningsBreakdown(
-        userId,
-        startDate,
-        endDate,
-        Payout
-      );
-
-      return res.status(200).json({
-        success: true,
-        data: {
-          period,
-          startDate,
-          endDate,
-          transactions: breakdown
-        }
-      });
-    } catch (error: any) {
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to fetch earnings breakdown',
-        error: error.message
-      });
-    }
-  },
-
-  // Get earnings for custom date range
-  getCustomRange: async (req: any, res: any) => {
-    try {
-      const userId = req.user._id;
-      const { Payout } = req.models;
-      const { startDate, endDate } = req.query;
-
-      if (!startDate || !endDate) {
-        return res.status(400).json({
-          success: false,
-          message: 'startDate and endDate are required'
-        });
-      }
-
-      const start = new Date(startDate);
-      const end = new Date(endDate);
-
-      if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid date format'
-        });
-      }
-
-      const earnings = await EarningsService.calculateEarnings(userId, start, end, Payout);
-      const breakdown = await EarningsService.getEarningsBreakdown(userId, start, end, Payout);
-
-      return res.status(200).json({
-        success: true,
-        data: {
-          totalEarnings: earnings,
-          startDate: start,
-          endDate: end,
-          transactions: breakdown
-        }
-      });
-    } catch (error: any) {
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to fetch earnings for custom range',
-        error: error.message
-      });
-    }
-  },
-
-  // Get earnings trend data for charts
   getTrend: async (req: Request, res: Response) => {
     try {
       const userId = req?.user?.id;
@@ -201,87 +99,24 @@ export const EarningsController = {
     }
   },
 
-  // GET /api/payouts/stats
-  getPayoutStats: async (req: Request, res: Response) => {
+  getPayoutAfterCommission: async (req: Request, res: Response) => {
     try {
-      const toUser = req.user?.id || (req.query.toUser as string);
+      const userId = req.user?.id;
+      const filters = req.query;
 
-      if (!toUser) {
-        return res.status(400).json({
-          success: false,
-          message: 'User ID is required'
-        });
-      }
-
-      const stats = await EarningsService.getPayoutStats(toUser);
+      const result = await EarningsService.getTotalPayoutsAfterCommission(
+        userId as string,
+        filters
+      );
 
       return res.status(200).json({
         success: true,
-        data: stats
+        data: result
       });
     } catch (error: any) {
       return res.status(500).json({
         success: false,
-        message: 'Failed to fetch payout stats',
-        error: (error as Error).message
-      });
-    }
-  },
-
-  async convertToCSV(data: any[]) {
-    if (data.length === 0) return '';
-
-    const headers = ['Date', 'Lesson/Service', 'Amount'];
-    const rows = data.map(item => [
-      new Date(item.date).toLocaleDateString(),
-      item.lessonService,
-      `$${item.amount.toFixed(2)}`
-    ]);
-
-    const csvContent = [headers.join(','), ...rows.map(row => row.join(','))].join('\n');
-
-    return csvContent;
-  },
-
-  // Export payouts as CSV
-  async exportPayouts(req: Request, res: Response) {
-    try {
-      const toUser = req.user?.id || req.body.toUser;
-
-      if (!toUser) {
-        return res.status(400).json({
-          success: false,
-          message: 'User ID is required'
-        });
-      }
-
-      // Build query without pagination for export
-      const query: any = {
-        toUser,
-        lessonType: req.body.lessonType,
-        paymentStatus: req.body.paymentStatus,
-        amountRange: req.body.amountRange,
-        startDate: req.body.startDate,
-        endDate: req.body.endDate,
-        page: 1,
-        limit: 10000, // Large limit for export
-        sortBy: 'createdAt',
-        sortOrder: 'desc'
-      };
-
-      const result = await EarningsService.listPayouts(query);
-
-      // Convert to CSV
-      const csv = this.convertToCSV(result.data);
-
-      res.setHeader('Content-Type', 'text/csv');
-      res.setHeader('Content-Disposition', 'attachment; filename=payouts.csv');
-
-      return res.status(200).send(csv);
-    } catch (error: any) {
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to export payouts',
+        message: 'Failed to fetch earnings commission',
         error: error.message
       });
     }

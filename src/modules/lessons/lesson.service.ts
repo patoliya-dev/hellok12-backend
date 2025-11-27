@@ -13,6 +13,8 @@ import {
   getTotalCount
 } from './lesson.queries';
 import { transformSessionToLesson } from './lesson.helper';
+import sessionService from '../sessions/sessions.service';
+import Logger from '../../utils/winstonLogger.utils';
 
 interface GetLessonsQuery {
   teacherId: string;
@@ -610,6 +612,7 @@ export const LessonService = {
     const teacherId: Types.ObjectId = (course as any).teacherId || (course as any).ownerId;
 
     const ops: any[] = [];
+    const sessionsToUpdate: Array<{ lessonId: string; startAt: Date; endAt: Date }> = [];
 
     for (const id of deletes || []) {
       if (!Types.ObjectId.isValid(id)) continue;
@@ -655,6 +658,8 @@ export const LessonService = {
         $set.schedule = merged;
         $set.startAt = startAt;
         $set.endAt = endAt;
+
+        sessionsToUpdate.push({ lessonId: _id.toString(), startAt, endAt });
       }
 
       if (Object.keys($set).length) {
@@ -670,6 +675,25 @@ export const LessonService = {
 
     await Lesson.bulkWrite(ops, { ordered: false });
     await recomputeCourseTrialAvailability(courseId);
+
+    // Update sessions for lessons with schedule changes
+    if (sessionsToUpdate.length > 0) {
+      await Promise.all(
+        sessionsToUpdate.map(async ({ lessonId, startAt, endAt }) => {
+          try {
+            await sessionService.updateSessionForLesson({
+              lessonId,
+              courseId: courseId.toString(),
+              teacherId: teacherId.toString(),
+              start: startAt,
+              end: endAt
+            });
+          } catch (error: any) {
+            Logger.error(`Failed to update session for lesson ${lessonId}:`, error);
+          }
+        })
+      );
+    }
 
     const refreshed = await Lesson.find({ courseId }).sort({ order: 1 }).lean();
     return { items: refreshed, count: refreshed.length };

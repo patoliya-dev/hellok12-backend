@@ -1,4 +1,3 @@
-import mongoose, { Types } from 'mongoose';
 import payoutModel from '../../models/payout.model';
 
 interface IEarningsSummary {
@@ -22,18 +21,6 @@ interface IEarningsSummary {
 interface IDateRange {
   startDate: Date;
   endDate: Date;
-}
-
-function getWeekStart(date: Date) {
-  const d = new Date(date);
-  const day = d.getDay(); // 0 = Sun
-  const diff = d.getDate() - day + (day === 0 ? -6 : 1); // make Monday start
-  return new Date(d.setDate(diff));
-}
-
-function getDateFromWeekNumber(year: number, week: number) {
-  const simple = new Date(year, 0, 1 + (week - 1) * 7);
-  return getWeekStart(simple);
 }
 
 function getWeekNumber(date: Date) {
@@ -206,22 +193,6 @@ export const EarningsService = {
         comparisonPeriod: 'vs previous year'
       }
     };
-  },
-
-  // Get detailed earnings breakdown
-  async getEarningsBreakdown(userId: string, startDate: Date, endDate: Date, PayoutModel: any) {
-    return await PayoutModel.find({
-      toUser: userId,
-      status: { $in: ['SENT', 'SETTLED'] },
-      createdAt: {
-        $gte: startDate,
-        $lte: endDate
-      }
-    })
-      .populate('transaction')
-      .populate('invoice')
-      .sort({ createdAt: -1 })
-      .lean();
   },
 
   // Get optimized earnings trend using aggregation Much faster than multiple queries
@@ -508,38 +479,47 @@ export const EarningsService = {
     };
   },
 
-  async getPayoutStats(toUser: string) {
-    const userId = new Types.ObjectId(toUser);
+  async getTotalPayoutsAfterCommission(userId: string, filters?: any) {
+    const { startDate, endDate } = filters;
 
-    const stats = await payoutModel.aggregate([
-      {
-        $match: {
-          'metadata.raw.payoutReceiverId': userId,
-          status: { $in: ['PAID', 'PROCESSING', 'PENDING'] }
-        }
-      },
-      {
-        $group: {
-          _id: '$status',
-          count: { $sum: 1 },
-          totalAmount: { $sum: '$amount' }
-        }
-      }
-    ]);
+    const query: any = {
+      'metadata.raw.payoutReceiverId': userId,
+      status: 'PAID'
+    };
 
-    const totalEarnings = await payoutModel.aggregate([
-      { $match: { 'metadata.raw.payoutReceiverId': userId } },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: '$amount' }
-        }
-      }
-    ]);
+    if (startDate || endDate) {
+      query.createdAt = {};
+      if (startDate) query.createdAt.$gte = startDate;
+      if (endDate) query.createdAt.$lte = endDate;
+    }
+
+    const total = await payoutModel.countDocuments(query);
+
+    const payouts = await payoutModel
+      .find(query)
+      .populate({
+        path: 'transaction',
+        select: 'downloadUrl reference'
+      })
+      .populate({
+        path: 'invoice',
+        select: 'invoiceNumber'
+      })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const formattedPayouts: any = payouts.map((payout: any) => ({
+      _id: payout._id.toString(),
+      invoiceNumber: payout.transaction.reference,
+      date: payout.createdAt,
+      amount: payout.netAmount,
+      status: payout.status,
+      downloadUrl: payout.transaction?.downloadUrl || `/api/payouts/${payout._id}/download`
+    }));
 
     return {
-      byStatus: stats,
-      totalEarnings: totalEarnings[0]?.total || 0
+      payouts: formattedPayouts,
+      total
     };
   }
 };

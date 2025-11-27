@@ -31,6 +31,10 @@ export const createLesson = async (req: Request, res: Response) => {
 
     const created = await LessonService.create(payload);
 
+    if (!created) {
+      throw new Error('Lesson creation failed');
+    }
+
     const session = await sessionService.createSessionForLesson({
       lessonId: created.id,
       courseId: created.courseId as unknown as string,

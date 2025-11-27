@@ -33,7 +33,6 @@ interface Config {
   STRIPE_WEBHOOK_SECRET: string;
   PLATFORM_FEE_PERCENT: number;
   CURRENCY: string;
-  STRIPE_AUTO_TRANSFER?: string;
   STRIPE_API_VERSION?: string;
   zoomAccountId: string;
   zoomClientId: string;
@@ -65,9 +64,8 @@ const config: Config = {
   },
   STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY || '',
   STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET || '',
-  PLATFORM_FEE_PERCENT: Number(process.env.PLATFORM_FEE_PERCENT || 0.2), // 20% default
+  PLATFORM_FEE_PERCENT: 20, // 20% default
   CURRENCY: process.env.DEFAULT_CURRENCY || 'usd',
-  STRIPE_AUTO_TRANSFER: 'false',
   STRIPE_API_VERSION: '2022-11-15',
   zoomAccountId: process.env.ZOOM_ACCOUNT_ID || '',
   zoomClientId: process.env.ZOOM_CLIENT_ID || '',

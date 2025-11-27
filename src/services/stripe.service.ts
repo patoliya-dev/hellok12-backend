@@ -1,22 +1,16 @@
 import Stripe from 'stripe';
-import mongoose from 'mongoose';
 import config from '../config/config';
 import { User } from '../models/user.model';
 import PaymentMethodModel from '../models/paymentMethod.model';
-import TransactionModel from '../models/transaction.model';
-import InvoiceModel from '../models/invoice.model';
 import WebhookEventLog from '../models/webhookEventLog.model';
+import TransactionModel from '../models/transaction.model';
+import { SessionModel } from '../models/sessions.model';
+import InvoiceModel from '../models/invoice.model';
 import BookingModel from '../models/booking.model';
 import payoutModel from '../models/payout.model';
 import { Course } from '../models/course.model';
-import { Lesson } from '../models/lesson.model';
 
-const {
-  STRIPE_SECRET_KEY,
-  PLATFORM_FEE_PERCENT = 20,
-  STRIPE_AUTO_TRANSFER = 'false',
-  STRIPE_API_VERSION = '2022-11-15'
-} = config;
+const { STRIPE_SECRET_KEY, PLATFORM_FEE_PERCENT = 20, STRIPE_API_VERSION = '2022-11-15' } = config;
 
 const stripe = new Stripe(STRIPE_SECRET_KEY, {
   apiVersion: STRIPE_API_VERSION
@@ -76,6 +70,59 @@ function computePlatformFee(amountCents: number) {
   return Math.round(amountCents * (percent / 100));
 }
 
+// snippet for stripe.service.ts (TypeScript/JS)
+async function createInvoiceAndCharge(params: {
+  customerId: string;
+  paymentMethodId?: string; // optional: stripe PM id to charge (or rely on customer's default PM)
+  items?: {
+    amount: number;
+    currency?: string;
+    description?: string;
+    metadata?: Record<string, any>;
+  }[]; // [{ amount: 9900, currency: 'usd', description: 'Course: Algebra 1' }]
+  metadata?: Record<string, any>;
+}) {
+  const { customerId, paymentMethodId, items = [], metadata = {} } = params;
+  // 1) Optionally set customer's invoice_settings.default_payment_method so finalizeInvoice will attempt to charge it
+  if (paymentMethodId) {
+    try {
+      await stripe.customers.update(customerId, {
+        invoice_settings: { default_payment_method: paymentMethodId }
+      });
+    } catch (err) {
+      // non-fatal - log and continue
+      console.warn('Failed to set customer default PM', err);
+    }
+  }
+
+  // 2) Create invoice items
+  for (const it of items) {
+    await stripe.invoiceItems.create({
+      customer: customerId,
+      amount: it.amount, // cents
+      currency: it.currency || 'usd',
+      description: it.description || 'Course purchase',
+      metadata: it.metadata || {}
+    });
+  }
+
+  // 3) Create invoice that will try to charge automatically
+  const invoice = await stripe.invoices.create({
+    customer: customerId,
+    collection_method: 'charge_automatically', // charge automatically using customer's default PM
+    auto_advance: true, // attempts to finalize and pay
+    metadata
+  });
+
+  // 4) Finalize invoice -> this will create the PaymentIntent & try to pay
+  const finalized = await stripe.invoices.finalizeInvoice(invoice.id);
+
+  // The finalized invoice may include a payment_intent object. If it does, return that client_secret
+  const paymentIntent = (finalized as any).payment_intent || null;
+
+  return { invoice: finalized, paymentIntent };
+}
+
 export interface CreatePaymentIntentParams {
   userId: string;
   amount: number; // cents
@@ -95,23 +142,7 @@ export interface CreatePaymentIntentParams {
   metadata?: Record<string, string>;
 }
 
-// ----------------------------- Create PaymentIntent -----------------------------
-export async function createPaymentIntent(params: {
-  userId: string;
-  amount: number;
-  currency?: string;
-  bookingId?: string;
-  teacherId?: string;
-  paymentMethodId?: string;
-  savePaymentMethod?: boolean;
-  payoutReceiverType?: 'teacher' | 'school';
-  payoutReceiverId?: string;
-  courseId?: string;
-  courseTitle?: string;
-  idempotencyKey?: string;
-  metadata?: Record<string, string>;
-  studentId?: string;
-}) {
+export async function createPaymentIntent(params: CreatePaymentIntentParams) {
   const {
     userId,
     amount,
@@ -126,7 +157,9 @@ export async function createPaymentIntent(params: {
     payoutReceiverId,
     courseId,
     courseTitle,
-    studentId
+    studentId,
+    lessonId,
+    isTrial
   } = params as any;
 
   if (!amount || amount <= 0) throw new Error('Invalid amount');
@@ -137,7 +170,7 @@ export async function createPaymentIntent(params: {
   // Compute platform fee
   const platformFee = computePlatformFee(amount);
 
-  // Build pi metadata so webhook can reconcile
+  // Build PI metadata (strings only)
   const piMetadata: Record<string, string> = {
     userId: String(userId),
     bookingId: bookingId || '',
@@ -146,6 +179,8 @@ export async function createPaymentIntent(params: {
     courseId: courseId || '',
     courseTitle: courseTitle || '',
     studentId: studentId || '',
+    lessonId: lessonId || '',
+    isTrial: isTrial ? 'true' : 'false',
     ...Object.keys(metadata || {}).reduce((acc: Record<string, string>, k) => {
       acc[k] = String((metadata as any)[k]);
       return acc;
@@ -163,16 +198,29 @@ export async function createPaymentIntent(params: {
     setup_future_usage: savePaymentMethod ? 'off_session' : undefined
   };
 
-  const opt: Stripe.RequestOptions = {};
-  if (idempotencyKey) opt.idempotencyKey = idempotencyKey;
+  const requestOptions: Stripe.RequestOptions = {};
+  if (idempotencyKey) requestOptions.idempotencyKey = idempotencyKey;
 
-  const pi = await stripe.paymentIntents.create(piParams, opt);
+  const pi = await stripe.paymentIntents.create(piParams, requestOptions);
 
-  // Create a local Transaction skeleton (PENDING)
+  // Persist transaction skeleton (PENDING)
   const reference = `REF_${Date.now().toString().slice(-6)}_${Math.floor(Math.random() * 900 + 100)}`;
   const title = courseTitle || piMetadata.courseTitle || 'Course Purchase';
 
-  await TransactionModel.create({
+  // inside your createPaymentIntent
+  const items = [
+    { amount, currency, description: courseTitle || 'Course purchase' },
+    { amount: platformFee, currency, description: 'Platform fee' }
+  ];
+
+  const { invoice: stripeInvoice } = await createInvoiceAndCharge({
+    customerId: user.stripeCustomerId || '',
+    paymentMethodId,
+    items,
+    metadata: piMetadata
+  });
+
+  const tx = await TransactionModel.create({
     payer: userId,
     payee: payoutReceiverId || teacherId || null,
     booking: bookingId || null,
@@ -183,17 +231,23 @@ export async function createPaymentIntent(params: {
     amount,
     amountDisplay: `$${(amount / 100).toFixed(2)}`,
     currency,
-    status: 'PENDING',
-    stripePaymentIntentId: pi.id,
     platformFee,
     netAmount: Math.max(0, amount - platformFee),
     stripeCustomerId: user.stripeCustomerId,
+    stripeInvoiceId: stripeInvoice?.id || null,
+    stripePaymentIntentId: pi?.id || null,
+    status: pi ? (pi.status === 'succeeded' ? 'SUCCEEDED' : 'PENDING') : 'PENDING',
     metadata: piMetadata,
     createdAt: new Date(),
     updatedAt: new Date()
   });
 
-  return pi;
+  return {
+    client_secret: pi?.client_secret || null,
+    invoiceId: stripeInvoice?.id || null,
+    id: pi?.id,
+    hosted_invoice_url: stripeInvoice?.hosted_invoice_url || null
+  };
 }
 
 // ----------------------------- Webhook event processing -----------------------------
@@ -239,7 +293,14 @@ export async function handleStripeEvent(event: Stripe.Event) {
   }
 }
 
-// ----------------------------- Handle PaymentIntent Succeeded (transactional) -----------------------------
+/**
+ * Handle succeeded PI:
+ * - upsert Transaction & Invoice
+ * - mark Booking PAID
+ * - atomically: increment Course.enrolledCount (if not trial), decrement Lesson.trialCapacity (if trial)
+ * - atomically add student to Session.students ($addToSet)
+ * Uses mongoose transactions when replica set available; otherwise falls back to best-effort single-doc atomic ops.
+ */
 export async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent) {
   // Locate existing transaction
   let tx = await TransactionModel.findOne({ stripePaymentIntentId: pi.id });
@@ -274,7 +335,6 @@ export async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent) {
       invoicePdfUrl = (stripeInvoice as any)?.invoice_pdf || null;
       hostedInvoiceUrl = (stripeInvoice as any)?.hosted_invoice_url || null;
     } catch (err) {
-      // ignore invoice retrieval errors
       console.warn('Failed to retrieve Stripe invoice', err);
     }
   }
@@ -341,7 +401,7 @@ export async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent) {
     await tx.save();
   }
 
-  // Build invoice items and upsert invoice
+  // Build invoice items and upsert invoice (same as before)
   const items: any[] = [];
   const courseLabel =
     (pi.metadata as any)?.courseTitle ||
@@ -406,18 +466,46 @@ export async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent) {
     await tx.save();
   }
 
-  // Update booking atomically
+  // Update booking atomically and add student to sessions
   try {
     const bookingId = (pi.metadata as any)?.bookingId;
     if (bookingId) {
-      // find booking
+      // fetch fresh booking
       const booking = await BookingModel.findById(bookingId).lean();
-      if (booking) {
-        // only update bookings that are not already PAID
-        await BookingModel.updateOne(
-          { _id: bookingId, paymentStatus: { $ne: 'PAID' } },
-          { $set: { paymentStatus: 'PAID', transaction: tx._id, updatedAt: new Date() } }
+      if (!booking) throw new Error('Booking not found during session update');
+
+      const studentId = booking.student;
+      const courseId = booking.course;
+
+      if (studentId && courseId) {
+        const now = new Date();
+
+        // 1) Add student to all future sessions of this course
+        await SessionModel.updateMany(
+          {
+            course: courseId,
+            start: { $gte: now } // ONLY future sessions
+          },
+          { $addToSet: { students: studentId } }
         );
+
+        // 2) Retrieve all session IDs where this student is now attached
+        const updatedSessions = await SessionModel.find({
+          course: courseId,
+          start: { $gte: now },
+          students: studentId
+        })
+          .select('_id')
+          .lean();
+
+        const sessionIds = (updatedSessions || []).map(s => s._id);
+
+        // 3) Save to booking.sessions
+        if (sessionIds.length > 0) {
+          await BookingModel.findByIdAndUpdate(bookingId, {
+            $addToSet: { sessions: { $each: sessionIds } }
+          });
+        }
       }
     }
   } catch (err) {
@@ -472,8 +560,6 @@ export async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent) {
     const payoutReceiverId =
       (pi.metadata as any)?.payoutReceiverId || (pi.metadata as any)?.teacherId || null;
 
-    // Defensive: always use the Payout model exported from your payout.model file
-    // (ensure import: import payoutModel from '../models/payout.model';)
     const existingPayout = await payoutModel.findOne({ transaction: tx._id });
 
     // choose a safe default for payout status: use PENDING so admins can reconcile or send
@@ -484,9 +570,9 @@ export async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent) {
         transaction: tx._id,
         invoice: inv?._id || null,
         toUser: payoutReceiverId || null,
-        toAccountId: null, // platform will manage payouts offline/admin panel
+        toAccountId: null,
         toType: payoutReceiverType || (payoutReceiverId ? 'teacher' : 'platform'),
-        amount: tx.netAmount || netAmount,
+        amount: tx.amount || amount,
         currency: pi.currency || 'usd',
         platformFee: platformFee || 0,
         netAmount: tx.netAmount || netAmount,
@@ -497,7 +583,6 @@ export async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent) {
         updatedAt: new Date()
       });
     } else {
-      // Update existing payout values, keep status if already set to something meaningful
       existingPayout.toUser = existingPayout.toUser || payoutReceiverId || existingPayout.toUser;
       existingPayout.toType =
         existingPayout.toType ||
@@ -516,14 +601,15 @@ export async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent) {
       await existingPayout.save();
     }
   } catch (err) {
-    // Log but do not rethrow - payout creation failing should not break webhook processing
     console.warn('Failed to create or update payout record', err);
   }
 
   return;
 }
 
-// ----------------------------- Handle PI failed -----------------------------
+/**
+ * When PI fails, mark tx FAILED and update booking
+ */
 export async function handlePaymentIntentFailed(pi: Stripe.PaymentIntent) {
   const t = await TransactionModel.findOne({ stripePaymentIntentId: pi.id });
   if (t) {

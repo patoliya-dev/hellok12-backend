@@ -4,6 +4,7 @@ export interface IBooking extends Document {
   student: mongoose.Types.ObjectId | string;
   course?: mongoose.Types.ObjectId | string;
   bookedBy?: mongoose.Types.ObjectId | string;
+  lesson?: mongoose.Types.ObjectId | string;
   location?: string;
   start?: Date;
   end?: Date;
@@ -21,6 +22,7 @@ const BookingSchema = new Schema<IBooking>({
   student: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   course: { type: Schema.Types.ObjectId, ref: 'Course' },
   bookedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  lesson: { type: Schema.Types.ObjectId, ref: 'Lesson' },
   location: { type: String },
   start: { type: Date },
   end: { type: Date },

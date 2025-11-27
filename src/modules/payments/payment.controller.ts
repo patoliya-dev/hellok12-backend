@@ -126,7 +126,7 @@ export async function createPaymentIntent(req: Request, res: Response, next: Nex
       metadata: z.record(z.string(), z.string()).optional()
     });
     const payload = bodySchema.parse(incoming);
-    const pi = await stripeService.createPaymentIntent({
+    const pi: any = await stripeService.createPaymentIntent({
       userId,
       amount: payload.amount,
       currency: payload.currency,

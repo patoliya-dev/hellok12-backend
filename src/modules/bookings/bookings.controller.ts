@@ -1,117 +1,96 @@
-import { Request, Response, NextFunction } from 'express';
-import Booking from '../../models/booking.model';
+// src/modules/bookings/bookings.controller.ts
+import { Request, Response } from 'express';
+import { Types } from 'mongoose';
+import BookingModel from '../../models/booking.model';
 import { Course } from '../../models/course.model';
-import { Lesson as LessonModel } from '../../models/lesson.model';
-import { User } from '../../models/user.model';
+import { Lesson } from '../../models/lesson.model';
+import { createErrorResponse, createSuccessResponse } from '../../utils/apiResponse'; // adjust path as needed
 
-// NOTE: Adjust import paths above to match your project structure if necessary.
-
-export async function createBooking(req: Request, res: Response, next: NextFunction) {
+/**
+ * Create a booking (booking record must exist BEFORE creating PaymentIntent)
+ * - validates capacity / trial rules
+ * - for trials: atomically decrements Lesson.trialCapacity and toggles flags when 0
+ * - creates booking document and returns booking to FE
+ *
+ * NOTE: We do NOT add the student to sessions here for paid bookings.
+ * For trial bookings you may choose to add session(s) now — this function does not add sessions.
+ */
+export async function createBooking(req: Request, res: Response) {
   try {
-    const userId = (req as any).user?.id;
-    if (!userId) return res.status(401).json({ success: false, message: 'Unauthorized' });
+    const user = (req as any).user; // from auth middleware
+    const body = req.body || {};
 
     const {
       courseId,
-      studentId: bodyStudentId,
+      studentId,
       teacherId,
       amount,
       isTrial = false,
-      lessonId
-    } = req.body || {};
+      lessonId,
+      location,
+      start,
+      end,
+      meta = {}
+    } = body as any;
 
-    // Determine student: if requester is parent they MUST pass studentId,
-    // otherwise use logged-in user's id.
-    const requestingUser = await User.findById(userId).lean();
-    if (!requestingUser) return res.status(401).json({ success: false, message: 'Unauthorized' });
+    if (!courseId) return res.status(400).json(createErrorResponse('Missing course/class id'));
 
-    let studentId = bodyStudentId;
-    if (requestingUser.role === 'parent') {
-      if (!studentId) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            code: 'STUDENT_REQUIRED',
-            message: 'studentId is required for parent users'
-          });
-      }
-      // Optional: validate that this student belongs to this parent
-      const rawChildren = await User.find({ parent: userId }).lean();
-      const childrenArray = Array.isArray(rawChildren)
-        ? rawChildren
-        : rawChildren
-          ? [rawChildren]
-          : [];
-      const childFound = childrenArray.some((c: any) => {
-        const id = c && ((c as any)._id ?? c);
-        return String(id) === String(studentId);
-      });
-      if (!childFound) {
-        return res
-          .status(403)
-          .json({
-            success: false,
-            code: 'INVALID_STUDENT',
-            message: 'Selected student does not belong to parent account'
-          });
-      }
-    } else {
-      // if not parent and no studentId provided, default to current user
-      if (!studentId) studentId = userId;
-    }
+    if (!studentId)
+      return res
+        .status(400)
+        .json({ success: false, code: 'STUDENT_REQUIRED', message: 'studentId required' });
 
-    // Basic validations
-    if (!courseId) return res.status(400).json({ success: false, message: 'courseId is required' });
+    // Normalize ObjectIds
+    const courseObjectId = Types.ObjectId.isValid(courseId) ? new Types.ObjectId(courseId) : null;
+    const studentObjectId = Types.ObjectId.isValid(studentId)
+      ? new Types.ObjectId(studentId)
+      : null;
+    const lessonObjectId =
+      lessonId && Types.ObjectId.isValid(lessonId) ? new Types.ObjectId(lessonId) : null;
+    const teacherObjectId =
+      teacherId && Types.ObjectId.isValid(teacherId) ? new Types.ObjectId(teacherId) : null;
 
-    const course = await Course.findById(courseId).lean();
+    if (!courseObjectId || !studentObjectId)
+      return res
+        .status(400)
+        .json({ success: false, code: 'INVALID_IDS', message: 'Invalid IDs provided' });
+
+    // Load course
+    const course = await Course.findById(courseObjectId).lean();
     if (!course)
       return res
         .status(404)
         .json({ success: false, code: 'COURSE_NOT_FOUND', message: 'Course not found' });
 
-    // Validate capacity BEFORE creating booking.
-    // For group: enrolledCount < studentCapacity
-    if (course.lessonType === 'group') {
-      const cap = Number(course.studentCapacity || 0);
-      const enrolled = Number(course.enrolledCount || 0);
-      if (enrolled >= cap) {
-        return res
-          .status(409)
-          .json({ success: false, code: 'COURSE_FULL', message: 'Course is full' });
+    // ENROLL validation: check capacity first (for paid enrollments)
+    if (!isTrial) {
+      if (course.lessonType === 'group' && typeof course.studentCapacity === 'number') {
+        if ((course.enrolledCount || 0) >= course.studentCapacity) {
+          return res
+            .status(409)
+            .json({ success: false, code: 'COURSE_FULL', message: 'Course is full' });
+        }
+      }
+      if (course.lessonType === '1-on-1') {
+        if ((course.enrolledCount || 0) >= 1) {
+          return res
+            .status(409)
+            .json({
+              success: false,
+              code: 'COURSE_FULL',
+              message: 'This 1-on-1 course is already taken'
+            });
+        }
       }
     }
 
-    // For 1-on-1: only one allowed
-    if (course.lessonType === '1-on-1') {
-      const enrolled = Number(course.enrolledCount || 0);
-      if (enrolled >= 1) {
-        return res
-          .status(409)
-          .json({
-            success: false,
-            code: 'COURSE_FULL',
-            message: 'This 1-on-1 course is already taken'
-          });
-      }
-    }
-
-    // If this is a trial booking, validate lesson & trial capacity & prior trial usage
+    // TRIAL flow: atomic decrement of lesson.trialCapacity and toggling flags when it hits 0
+    let reservedLesson: any = null;
     if (isTrial) {
-      if (!lessonId) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            code: 'LESSON_REQUIRED',
-            message: 'lessonId is required for trial bookings'
-          });
-      }
-
-      // Ensure user (student) hasn't already taken a trial for this course
-      const existingTrial = await Booking.findOne({
-        course: courseId,
-        student: studentId,
+      // 1) Per-user trial check: if the student already has a trial booking for this course, reject
+      const existingTrial = await BookingModel.findOne({
+        course: courseObjectId,
+        student: studentObjectId,
         isTrial: true
       }).lean();
 
@@ -121,75 +100,119 @@ export async function createBooking(req: Request, res: Response, next: NextFunct
           .json({
             success: false,
             code: 'ALREADY_TAKEN_TRIAL',
-            message: 'Trial already used for this course by the selected student'
+            message: 'This student has already taken a trial for this course'
           });
       }
 
-      // Atomically decrement lesson.trialCapacity if available
-      const lesson = await LessonModel.findOneAndUpdate(
-        {
-          _id: lessonId,
-          courseId: courseId,
+      // 2) Atomically reserve a seat on the chosen lesson OR any trial lesson for the course
+      if (lessonObjectId) {
+        reservedLesson = await Lesson.findOneAndUpdate(
+          { _id: lessonObjectId, isTrialAvailable: true, trialCapacity: { $gt: 0 } },
+          { $inc: { trialCapacity: -1 } },
+          { new: true }
+        ).lean();
+
+        if (!reservedLesson) {
+          return res
+            .status(409)
+            .json({
+              success: false,
+              code: 'TRIAL_CAPACITY_EXHAUSTED',
+              message: 'Trial capacity exhausted for selected lesson'
+            });
+        }
+      } else {
+        // pick any lesson for this course which has trial capacity
+        reservedLesson = await Lesson.findOneAndUpdate(
+          { courseId: courseObjectId, isTrialAvailable: true, trialCapacity: { $gt: 0 } },
+          { $inc: { trialCapacity: -1 } },
+          { new: true }
+        ).lean();
+
+        if (!reservedLesson) {
+          return res
+            .status(409)
+            .json({
+              success: false,
+              code: 'TRIAL_CAPACITY_EXHAUSTED',
+              message: 'No trial lessons available for this course'
+            });
+        }
+      }
+
+      // 3) If reservedLesson's trialCapacity reached 0, set its isTrialAvailable = false
+      try {
+        if (typeof reservedLesson.trialCapacity === 'number' && reservedLesson.trialCapacity <= 0) {
+          await Lesson.updateOne(
+            { _id: reservedLesson._id },
+            { $set: { isTrialAvailable: false } }
+          );
+        }
+
+        // 4) If no other lessons for this course have trialCapacity > 0 then set course.isTrialAvailable = false
+        const remaining = await Lesson.countDocuments({
+          courseId: courseObjectId,
           isTrialAvailable: true,
           trialCapacity: { $gt: 0 }
-        },
-        { $inc: { trialCapacity: -1 } },
-        { new: true }
-      ).lean();
-
-      if (!lesson) {
-        return res
-          .status(409)
-          .json({
-            success: false,
-            code: 'TRIAL_CAPACITY_EXHAUSTED',
-            message: 'No trial capacity left for this lesson'
-          });
+        });
+        if (!remaining || remaining === 0) {
+          await Course.updateOne({ _id: courseObjectId }, { $set: { isTrialAvailable: false } });
+        } else {
+          // ensure course flag remains true if others exist
+          if (!course.isTrialAvailable) {
+            await Course.updateOne({ _id: courseObjectId }, { $set: { isTrialAvailable: true } });
+          }
+        }
+      } catch (flagErr) {
+        // If flag update fails, log but continue — we have reserved capacity. FE will show booking success.
+        console.warn('Failed to update trial availability flags', flagErr);
       }
-    } else {
-      // For paid enrollments: optionally check trial flags or anything else here
-      // We do NOT increment course.enrolledCount here — increment happens on payment success webhook
-    }
+    } // end isTrial block
 
-    // Create booking BEFORE payment as required (booking will be reconciled by webhook)
+    // Build booking payload
     const bookingPayload: any = {
-      student: studentId,
-      course: courseId,
-      bookedBy: userId,
+      student: studentObjectId,
+      course: courseObjectId,
+      bookedBy: user?._id || studentObjectId,
       isTrial: !!isTrial,
-      meta: { amount: amount || 0, lessonId: lessonId || null },
+      paymentStatus: isTrial ? 'NOT_REQUIRED' : 'PENDING',
+      paymentFlow: isTrial ? 'TRIAL_FREE' : 'DIRECT_SUPER_ADMIN',
+      meta: Object.assign({}, meta, { amount: amount || null }),
       createdAt: new Date(),
       updatedAt: new Date()
     };
 
-    if (isTrial) {
-      bookingPayload.paymentStatus = 'NOT_REQUIRED';
-      bookingPayload.paymentFlow = 'TRIAL_FREE';
-      bookingPayload.paymentStatus = 'PAID'; // trial considered paid / consumed
-    } else {
-      bookingPayload.paymentStatus = 'PENDING';
-      bookingPayload.paymentFlow = 'DIRECT_SUPER_ADMIN';
+    if (teacherObjectId) bookingPayload.bookedForTeacher = teacherObjectId;
+    if (location) bookingPayload.location = location;
+    if (start) bookingPayload.start = new Date(start);
+    if (end) bookingPayload.end = new Date(end);
+    if (lessonObjectId) bookingPayload.lesson = lessonObjectId;
+    else if (isTrial && reservedLesson && reservedLesson._id)
+      bookingPayload.lesson = reservedLesson._id;
+
+    // Create booking doc (booking must exist before PaymentIntent)
+    let booking;
+    try {
+      booking = await BookingModel.create(bookingPayload);
+    } catch (createErr) {
+      // On booking creation failure, revert reserved trial seat if any
+      if (isTrial && reservedLesson && reservedLesson._id) {
+        try {
+          await Lesson.findByIdAndUpdate(reservedLesson._id, {
+            $inc: { trialCapacity: 1 },
+            $set: { isTrialAvailable: true }
+          });
+        } catch (revertErr) {
+          console.error('Failed to revert trialCapacity after booking creation failure', revertErr);
+        }
+      }
+      throw createErr;
     }
 
-    const booking = await Booking.create(bookingPayload);
-
-    // Response shape: provide booking id and minimal info so FE can create PaymentIntent next
-    return res.json({
-      success: true,
-      booking: {
-        _id: booking._id,
-        student: booking.student,
-        course: booking.course,
-        isTrial: booking.isTrial,
-        paymentStatus: booking.paymentStatus,
-        paymentFlow: booking.paymentFlow,
-        meta: booking.meta,
-        createdAt: booking.createdAt
-      }
-    });
-  } catch (err) {
-    next(err);
+    // Success response
+    return res.status(201).json(createSuccessResponse({ booking, message: 'Booking created' }));
+  } catch (err: any) {
+    console.error('createBooking error', err);
+    return res.status(500).json(createErrorResponse('Internal server error', err?.message || err));
   }
 }
-
-export default { createBooking };

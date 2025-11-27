@@ -37,6 +37,7 @@ interface Config {
   zoomAccountId: string;
   zoomClientId: string;
   zoomClientSecret: string;
+  // zoomWebhookSecretToken: string;
 }
 
 // Type-safe config object
@@ -69,6 +70,7 @@ const config: Config = {
   zoomAccountId: process.env.ZOOM_ACCOUNT_ID || '',
   zoomClientId: process.env.ZOOM_CLIENT_ID || '',
   zoomClientSecret: process.env.ZOOM_CLIENT_SECRET || ''
+  // zoomWebhookSecretToken: process.env.ZOOM_WEBHOOK_SECRET_TOKEN || ''
 };
 
 export default config;

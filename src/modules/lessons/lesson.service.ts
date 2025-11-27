@@ -684,6 +684,11 @@ export const LessonService = {
     await Lesson.bulkWrite(ops, { ordered: false });
     await recomputeCourseTrialAvailability(courseId);
 
+    const refreshed = await Lesson.find({ courseId }).sort({ order: 1 }).lean();
+    if (course?.mode === 'in-person') {
+      return { items: refreshed, count: refreshed.length };
+    }
+
     // Update sessions for lessons with schedule changes
     if (sessionsToUpdate.length > 0) {
       await Promise.all(
@@ -702,8 +707,6 @@ export const LessonService = {
         })
       );
     }
-
-    const refreshed = await Lesson.find({ courseId }).sort({ order: 1 }).lean();
     return { items: refreshed, count: refreshed.length };
   },
 

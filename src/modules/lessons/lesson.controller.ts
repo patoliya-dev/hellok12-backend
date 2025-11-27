@@ -35,6 +35,12 @@ export const createLesson = async (req: Request, res: Response) => {
       throw new Error('Lesson creation failed');
     }
 
+    const course = await CourseService.getById(courseId);
+
+    if (course?.mode === 'in-person') {
+      return res.status(201).json(createSuccessResponse({ created }, 'Created', 201));
+    }
+
     const session = await sessionService.createSessionForLesson({
       lessonId: created.id,
       courseId: created.courseId as unknown as string,
@@ -146,6 +152,12 @@ export const bulkCreateForCourse = async (req: Request, res: Response) => {
     const lessons = req.body.lessons || [];
 
     const result = await LessonService.bulkCreateForCourse({ courseId, lessons });
+
+    const course = await CourseService.getById(req.params.courseId);
+
+    if (course?.mode === 'in-person') {
+      return res.status(201).json(createSuccessResponse(result, 'Lessons created', 201));
+    }
 
     const sessions = await Promise.all(
       result.items.map(async lesson => {

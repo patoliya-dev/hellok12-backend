@@ -476,34 +476,30 @@ export async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent) {
 
       const studentId = booking.student;
       const courseId = booking.course;
-
       if (studentId && courseId) {
         const now = new Date();
 
         // 1) Add student to all future sessions of this course
         await SessionModel.updateMany(
           {
-            course: courseId,
-            start: { $gte: now } // ONLY future sessions
+            course: courseId
           },
           { $addToSet: { students: studentId } }
         );
 
         // 2) Retrieve all session IDs where this student is now attached
         const updatedSessions = await SessionModel.find({
-          course: courseId,
-          start: { $gte: now },
-          students: studentId
+          course: courseId
         })
           .select('_id')
           .lean();
 
         const sessionIds = (updatedSessions || []).map(s => s._id);
-
         // 3) Save to booking.sessions
         if (sessionIds.length > 0) {
           await BookingModel.findByIdAndUpdate(bookingId, {
-            $addToSet: { sessions: { $each: sessionIds } }
+            $addToSet: { sessions: { $each: sessionIds } },
+            paymentStatus: 'PAID'
           });
         }
       }

@@ -53,4 +53,25 @@ r.get(
   ctrl.getLessonStats
 );
 
+r.get(
+  '/getLessonsForStudent/:studentId',
+  authenticate,
+  authorize([USER_ROLES.STUDENT, USER_ROLES.PARENT]),
+  ctrl.getLessonsForStudent
+);
+
+r.get(
+  '/students/:studentId/calendar',
+  authenticate,
+  authorize([USER_ROLES.STUDENT, USER_ROLES.PARENT]),
+  ctrl.getStudentCalendarOverview
+);
+
+r.get(
+  '/students/:studentId/calendar/:date',
+  authenticate,
+  authorize([USER_ROLES.STUDENT, USER_ROLES.PARENT]),
+  ctrl.getStudentSessionsByDate
+);
+
 export default r;

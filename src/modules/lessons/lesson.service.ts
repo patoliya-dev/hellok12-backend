@@ -15,6 +15,8 @@ import {
 import { transformSessionToLesson } from './lesson.helper';
 import sessionService from '../sessions/sessions.service';
 import Logger from '../../utils/winstonLogger.utils';
+import { FeedbackRating } from '../../models/feedbackRatings.model';
+import bookingModel from '../../models/booking.model';
 
 interface GetLessonsQuery {
   teacherId: string;
@@ -689,7 +691,16 @@ export const LessonService = {
       return { items: refreshed, count: refreshed.length };
     }
 
-    // Update sessions for lessons with schedule changes
+    const enrolledStudents = await bookingModel
+      .find({
+        course: courseId,
+        paymentStatus: 'PAID'
+      })
+      .select('student')
+      .lean();
+
+    const studentIds = enrolledStudents.map((booking: any) => booking.student.toString());
+
     if (sessionsToUpdate.length > 0) {
       await Promise.all(
         sessionsToUpdate.map(async ({ lessonId, startAt, endAt }) => {
@@ -699,7 +710,8 @@ export const LessonService = {
               courseId: courseId.toString(),
               teacherId: teacherId.toString(),
               start: startAt,
-              end: endAt
+              end: endAt,
+              students: studentIds
             });
           } catch (error: any) {
             Logger.error(`Failed to update session for lesson ${lessonId}:`, error);
@@ -757,5 +769,162 @@ export const LessonService = {
       },
       pendingCount
     };
+  },
+
+  async getLessonsForStudent(studentId: string) {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+
+    const end = new Date();
+    end.setHours(23, 59, 59, 999);
+
+    const lessons: any = await SessionModel.find({
+      students: { $in: studentId },
+      start: { $gte: start, $lt: end }
+    })
+      .populate({
+        path: 'lesson',
+        select: 'title _id schedule status description isTrialAvailable',
+        populate: {
+          path: 'teacherId',
+          select: 'name _id',
+          populate: { path: 'profileImage', select: 'url' }
+        }
+      })
+      .populate({
+        path: 'course',
+        select: 'title _id mode description lessonType',
+        populate: { path: 'introImageRef', select: 'url' }
+      })
+      .select('joinUrl status start end')
+      .lean();
+
+    const teacherIds = lessons.map((lesson: any) => lesson.lesson?.teacherId?._id).filter(Boolean);
+
+    const ratings = await FeedbackRating.aggregate([
+      {
+        $match: {
+          teacher: { $in: teacherIds }
+        }
+      },
+      {
+        $group: {
+          _id: '$teacher',
+          averageRating: { $avg: '$rating' },
+          totalRatings: { $count: {} }
+        }
+      }
+    ]);
+
+    const ratingsMap = new Map(
+      ratings.map(r => [
+        r._id.toString(),
+        { averageRating: r.averageRating, totalRatings: r.totalRatings }
+      ])
+    );
+
+    const lessonsWithRatings = lessons.map((lesson: any) => {
+      if (lesson.lesson?.teacherId?._id) {
+        const teacherRating = ratingsMap.get(lesson.lesson.teacherId._id.toString());
+        return {
+          ...lesson,
+          lesson: {
+            ...lesson.lesson,
+            teacherId: {
+              ...lesson.lesson.teacherId,
+              rating: teacherRating || { averageRating: 0, totalRatings: 0 }
+            }
+          }
+        };
+      }
+      return lesson;
+    });
+
+    return lessonsWithRatings;
+  },
+
+  async getStudentCalendarOverview(
+    studentId: Types.ObjectId | string,
+    month: number,
+    year: number
+  ) {
+    const startOfMonth = new Date(year, month - 1, 1, 0, 0, 0, 0);
+    const endOfMonth = new Date(year, month, 0, 23, 59, 59, 999);
+
+    const monthFilter = {
+      students: { $in: new Types.ObjectId(studentId) },
+      start: { $gte: startOfMonth, $lte: endOfMonth }
+    };
+
+    const allSessions = await SessionModel.find(monthFilter)
+      .populate('lesson', 'title')
+      .sort({ start: 1 })
+      .lean();
+
+    const monthOverview: Record<
+      string,
+      {
+        count: number;
+        lessons: { id: string; title: string; time: string }[];
+      }
+    > = {};
+
+    for (const session of allSessions) {
+      const dateKey = session.start.toISOString().split('T')[0];
+
+      if (!monthOverview[dateKey]) {
+        monthOverview[dateKey] = { count: 0, lessons: [] };
+      }
+
+      monthOverview[dateKey].count++;
+      monthOverview[dateKey].lessons.push({
+        id: session._id.toString(),
+        title: (session.lesson as any)?.title || 'Untitled',
+        time: formatTime(session.start)
+      });
+    }
+
+    // Calculate stats
+    const stats = {
+      total: allSessions.length,
+      pending: allSessions.filter(
+        s => s.status === SessionStatus.SCHEDULED || s.status === SessionStatus.IN_PROGRESS
+      ).length,
+      completed: allSessions.filter(s => s.status === SessionStatus.COMPLETED).length
+    };
+
+    return { monthOverview, stats };
+  },
+
+  async getStudentSessionsByDate(studentId: Types.ObjectId | string, date: string) {
+    const [yearStr, monthStr, dayStr] = date.split('-');
+    const y = parseInt(yearStr);
+    const m = parseInt(monthStr) - 1;
+    const d = parseInt(dayStr);
+
+    const startOfDay = new Date(y, m, d, 0, 0, 0, 0);
+    const endOfDay = new Date(y, m, d, 23, 59, 59, 999);
+
+    const filter = {
+      students: { $in: new Types.ObjectId(studentId) },
+      start: { $gte: startOfDay, $lte: endOfDay }
+    };
+
+    const sessions = await SessionModel.find(filter)
+      .populate('lesson', 'title schedule')
+      .populate('course', 'title')
+      .sort({ start: 1 })
+      .lean();
+
+    return sessions.map((s, idx) => ({
+      _id: s._id,
+      title: (s.lesson as any)?.title || 'Untitled',
+      time: formatTime(s.start),
+      duration: calculateDuration(s.start, s.end),
+      status: s.status,
+      courseTitle: (s.course as any)?.title,
+      lessonId: s.lesson,
+      order: idx + 1
+    }));
   }
 };

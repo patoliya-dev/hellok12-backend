@@ -14,6 +14,7 @@ import { AuthenticatedRequest } from '../../middlewares/auth';
 import sessionService from '../sessions/sessions.service';
 import { UserPayload } from '../../types/UserPayload';
 import { SessionStatus } from '../../models/sessions.model';
+import bookingModel from '../../models/booking.model';
 
 export const createLesson = async (req: Request, res: Response) => {
   const parsed = lessonCreateSchema.safeParse(req.body);
@@ -159,6 +160,16 @@ export const bulkCreateForCourse = async (req: Request, res: Response) => {
       return res.status(201).json(createSuccessResponse(result, 'Lessons created', 201));
     }
 
+    const enrolledStudents = await bookingModel
+      .find({
+        course: courseId,
+        paymentStatus: 'PAID'
+      })
+      .select('student')
+      .lean();
+
+    const studentIds = enrolledStudents.map((booking: any) => booking.student.toString());
+
     const sessions = await Promise.all(
       result.items.map(async lesson => {
         const session = await sessionService.createSessionForLesson({
@@ -166,7 +177,8 @@ export const bulkCreateForCourse = async (req: Request, res: Response) => {
           courseId: lesson.courseId as unknown as string,
           teacherId: lesson.teacherId as unknown as string,
           start: lesson.startAt,
-          end: lesson.endAt
+          end: lesson.endAt,
+          students: studentIds
         });
 
         return session;
@@ -413,3 +425,75 @@ export const getLessons = async (req: Request, res: Response) => {
       .json(createErrorResponse('Error in getLessons', 'Internal Server Error', 500));
   }
 };
+
+export const getLessonsForStudent = async (req: Request, res: Response) => {
+  try {
+    const { studentId } = req.params;
+
+    if (!studentId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Unauthorized: Student ID not found'
+      });
+    }
+
+    const lessons = await LessonService.getLessonsForStudent(studentId);
+
+    return res.status(200).json({
+      success: true,
+      data: lessons
+    });
+  } catch (error) {
+    return res
+      .status(500)
+      .json(createErrorResponse('Error in getLessonsForStudent', 'Internal Server Error', 500));
+  }
+};
+
+export async function getStudentCalendarOverview(req: Request, res: Response) {
+  try {
+    const { month, year } = req.query;
+    const { studentId } = req.params;
+
+    if (!month || !year) {
+      return res.status(400).json({
+        success: false,
+        error: 'month and year query params are required'
+      });
+    }
+
+    const data = await LessonService.getStudentCalendarOverview(
+      studentId,
+      parseInt(month as string),
+      parseInt(year as string)
+    );
+
+    return res.json(createSuccessResponse(data, 'Calendar data', 200));
+  } catch (err) {
+    return res
+      .status(500)
+      .json(createErrorResponse('Failed to get calendar data', 'Internal Server Error', 500));
+  }
+}
+
+export async function getStudentSessionsByDate(req: Request, res: Response) {
+  try {
+    const { studentId, date } = req.params;
+    const user = (req as any).user;
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid date format. Use YYYY-MM-DD'
+      });
+    }
+
+    const sessions = await LessonService.getStudentSessionsByDate(studentId, date);
+
+    res.json(createSuccessResponse({ sessions }, 'Sessions for date', 200));
+  } catch (err) {
+    return res
+      .status(500)
+      .json(createErrorResponse('Failed to get sessions by date', 'Internal Server Error', 500));
+  }
+}

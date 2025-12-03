@@ -79,5 +79,24 @@ export const feedbackRatingsService = {
       totalFeedback: stats[0]?.totalFeedback || 0,
       ratingDistribution
     };
+  },
+
+  async createFeedback({
+    authorId,
+    teacherId,
+    rating,
+    comment
+  }: {
+    authorId: string;
+    teacherId: string;
+    rating: number;
+    comment: string;
+  }) {
+    return await FeedbackRating.create({
+      author: authorId,
+      teacher: teacherId,
+      rating,
+      comment
+    });
   }
 };

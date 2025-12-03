@@ -74,4 +74,20 @@ r.get(
   ctrl.getStudentSessionsByDate
 );
 
+// courses list
+r.get(
+  '/courses/:studentId',
+  authenticate,
+  authorize([USER_ROLES.STUDENT, USER_ROLES.PARENT]),
+  ctrl.getCourses
+);
+
+// student lessons page
+r.get(
+  '/studentLessons/:studentId',
+  authenticate,
+  authorize([USER_ROLES.PARENT, USER_ROLES.STUDENT]),
+  ctrl.getLessonsForStudentPage
+);
+
 export default r;

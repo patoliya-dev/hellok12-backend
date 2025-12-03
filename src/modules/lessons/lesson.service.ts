@@ -17,6 +17,7 @@ import sessionService from '../sessions/sessions.service';
 import Logger from '../../utils/winstonLogger.utils';
 import { FeedbackRating } from '../../models/feedbackRatings.model';
 import bookingModel from '../../models/booking.model';
+import { CourseOption, LessonItem, LessonListQuery, LessonViewType } from '../../types/LessonTypes';
 
 interface GetLessonsQuery {
   teacherId: string;
@@ -687,9 +688,6 @@ export const LessonService = {
     await recomputeCourseTrialAvailability(courseId);
 
     const refreshed = await Lesson.find({ courseId }).sort({ order: 1 }).lean();
-    if (course?.mode === 'in-person') {
-      return { items: refreshed, count: refreshed.length };
-    }
 
     const enrolledStudents = await bookingModel
       .find({
@@ -700,7 +698,7 @@ export const LessonService = {
       .lean();
 
     const studentIds = enrolledStudents.map((booking: any) => booking.student.toString());
-
+    console.log(studentIds);
     if (sessionsToUpdate.length > 0) {
       await Promise.all(
         sessionsToUpdate.map(async ({ lessonId, startAt, endAt }) => {
@@ -926,5 +924,150 @@ export const LessonService = {
       lessonId: s.lesson,
       order: idx + 1
     }));
+  },
+
+  async getStudentCourses(studentId: string): Promise<CourseOption[]> {
+    // Find all sessions where the student is enrolled
+    const sessions = await SessionModel.find({
+      students: studentId,
+      status: { $ne: SessionStatus.CANCELLED }
+    })
+      .populate('course', 'title')
+      .select('course')
+      .lean();
+
+    // Get unique course IDs
+    const courseIds = [...new Set(sessions.map((s: any) => s.course._id.toString()))];
+
+    // Get course details with lesson count
+    const courses = await Promise.all(
+      courseIds.map(async courseId => {
+        const course = await Course.findById(courseId).select('title').lean();
+        const lessonCount = await SessionModel.countDocuments({
+          course: courseId,
+          students: studentId,
+          status: { $ne: SessionStatus.CANCELLED }
+        });
+
+        return {
+          _id: courseId,
+          title: course?.title || '',
+          lessonCount
+        };
+      })
+    );
+
+    return courses.filter(c => c.title);
+  },
+
+  /**
+   * Get lessons for a student (both upcoming and history)
+   */
+  async getStudentLessons(query: LessonListQuery) {
+    const { studentId, courseId, view = LessonViewType.UPCOMING, page = 1, limit = 10 } = query;
+
+    const now = new Date();
+    const skip = (page - 1) * limit;
+
+    // Build query filters
+    const filters: any = {
+      students: studentId,
+      status: { $ne: SessionStatus.CANCELLED }
+    };
+
+    if (courseId) {
+      filters.course = courseId;
+    }
+
+    if (view === LessonViewType.UPCOMING) {
+      filters.start = { $gte: now };
+    } else {
+      filters.end = { $lt: now };
+    }
+
+    // Get total count
+    const totalItems = await SessionModel.countDocuments(filters);
+
+    // Fetch sessions with populated data
+    const sessions = await SessionModel.find(filters)
+      .populate({
+        path: 'course',
+        select: 'title lessonType mode',
+        populate: { path: 'introImageRef', select: 'url' }
+      })
+      .populate('lesson', 'title isTrialAvailable schedule description')
+      .populate({
+        path: 'teacher',
+        select: 'name',
+        populate: { path: 'profileImage', select: 'url' }
+      })
+      .sort(view === LessonViewType.UPCOMING ? { start: 1 } : { start: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+    const teacherIds = sessions.map((lesson: any) => lesson?.teacher?._id).filter(Boolean);
+    const ratings = await FeedbackRating.aggregate([
+      {
+        $match: {
+          teacher: { $in: teacherIds }
+        }
+      },
+      {
+        $group: {
+          _id: '$teacher',
+          averageRating: { $avg: '$rating' },
+          totalRatings: { $count: {} }
+        }
+      }
+    ]);
+
+    const ratingsMap = new Map(
+      ratings.map(r => [
+        r._id.toString(),
+        { averageRating: r.averageRating, totalRatings: r.totalRatings }
+      ])
+    );
+
+    const lessons: LessonItem[] = sessions.map((session: any) => {
+      const duration = Math.round((session.end - session.start) / (1000 * 60)); // minutes
+      const teacherRating = ratingsMap.get(session.teacher._id.toString());
+
+      const lessonItem: LessonItem = {
+        sessionId: session._id.toString(),
+        lessonTitle: session.lesson?.title || 'Untitled Lesson',
+        courseTitle: session.course?.title || 'Untitled Course',
+        teacher: {
+          _id: session.teacher._id.toString(),
+          name: session.teacher.name,
+          profileImage: session.teacher.profileImage,
+          rating: teacherRating || { averageRating: 0, totalRatings: 0 }
+        },
+        startTime: session.start,
+        endTime: session.end,
+        duration,
+        status: session.status,
+        lessonType: session.course?.lessonType || '1-on-1',
+        courseMode: session.course?.mode || 'online',
+        isTrialLesson: session.lesson?.isTrialAvailable || false,
+        description: session.lesson?.description
+      };
+
+      if (session.course?.mode === 'online' && session.joinUrl) {
+        lessonItem.meetingUrl = session.joinUrl;
+      }
+
+      return lessonItem;
+    });
+
+    return {
+      lessons,
+      pagination: {
+        currentPage: page,
+        totalPages: Math.ceil(totalItems / limit),
+        totalItems,
+        itemsPerPage: limit
+      },
+      view
+    };
   }
 };

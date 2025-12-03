@@ -48,7 +48,7 @@ const sessionService = {
 
       if (!zoomService.isConfigured()) {
         Logger.warning('Zoom not configured. Session created without meeting link.');
-      } else {
+      } else if (course.mode === 'online') {
         try {
           const duration = zoomService.calculateDuration(start, end);
           const zoomMeeting = await zoomService.createMeeting({
@@ -83,7 +83,7 @@ const sessionService = {
       }
 
       const session = await SessionModel.create(sessionData);
-
+      console.log(session);
       const populatedSession = await SessionModel.findById(session._id)
         .populate('teacher', 'name email profileImage')
         // .populate('students', 'name email profileImage')

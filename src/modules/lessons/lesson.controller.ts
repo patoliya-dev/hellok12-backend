@@ -15,6 +15,7 @@ import sessionService from '../sessions/sessions.service';
 import { UserPayload } from '../../types/UserPayload';
 import { SessionStatus } from '../../models/sessions.model';
 import bookingModel from '../../models/booking.model';
+import { CoursesListResponse, LessonListResponse, LessonViewType } from '../../types/LessonTypes';
 
 export const createLesson = async (req: Request, res: Response) => {
   const parsed = lessonCreateSchema.safeParse(req.body);
@@ -155,10 +156,6 @@ export const bulkCreateForCourse = async (req: Request, res: Response) => {
     const result = await LessonService.bulkCreateForCourse({ courseId, lessons });
 
     const course = await CourseService.getById(req.params.courseId);
-
-    if (course?.mode === 'in-person') {
-      return res.status(201).json(createSuccessResponse(result, 'Lessons created', 201));
-    }
 
     const enrolledStudents = await bookingModel
       .find({
@@ -495,5 +492,102 @@ export async function getStudentSessionsByDate(req: Request, res: Response) {
     return res
       .status(500)
       .json(createErrorResponse('Failed to get sessions by date', 'Internal Server Error', 500));
+  }
+}
+
+/**
+ * GET /api/lessons/courses
+ * Get list of courses for filter dropdown
+ */
+export async function getCourses(req: Request, res: Response): Promise<Response> {
+  try {
+    const { studentId } = req.params; // Assuming user is attached by auth middleware
+
+    if (!studentId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Unauthorized'
+      });
+    }
+
+    const courses = await LessonService.getStudentCourses(studentId);
+
+    const response: CoursesListResponse = {
+      success: true,
+      data: {
+        courses
+      }
+    };
+
+    return res.status(200).json(response);
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch courses'
+    });
+  }
+}
+
+/**
+ * GET /api/lessons
+ * Get list of lessons (upcoming or history)
+ * Query params:
+ *   - courseId: string (optional) - filter by course
+ *   - view: 'upcoming' | 'history' (optional, default: 'upcoming')
+ *   - page: number (optional, default: 1)
+ *   - limit: number (optional, default: 10)
+ */
+export async function getLessonsForStudentPage(req: Request, res: Response): Promise<Response> {
+  try {
+    const { studentId } = req.params; // Assuming user is attached by auth middleware
+
+    if (!studentId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Unauthorized'
+      });
+    }
+
+    const { courseId, view, page, limit } = req.query;
+
+    // Validate view parameter
+    const viewType = (view as LessonViewType) || LessonViewType.UPCOMING;
+    if (viewType !== LessonViewType.UPCOMING && viewType !== LessonViewType.HISTORY) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid view parameter. Must be "upcoming" or "history"'
+      });
+    }
+
+    // Parse pagination parameters
+    const pageNum = page ? parseInt(page as string, 10) : 1;
+    const limitNum = limit ? parseInt(limit as string, 10) : 10;
+
+    if (pageNum < 1 || limitNum < 1 || limitNum > 100) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid pagination parameters'
+      });
+    }
+
+    const data = await LessonService.getStudentLessons({
+      studentId,
+      courseId: courseId as string,
+      view: viewType,
+      page: pageNum,
+      limit: limitNum
+    });
+
+    const response: LessonListResponse = {
+      success: true,
+      data
+    };
+
+    return res.status(200).json(response);
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch lessons'
+    });
   }
 }

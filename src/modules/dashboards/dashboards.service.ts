@@ -11,7 +11,7 @@ import bookingModel from '../../models/booking.model';
 import payoutModel from '../../models/payout.model';
 
 export const teacherDashboardService = {
-  getDashboardStats: async (teacherId: string): Promise<DashboardStats> => {
+  getDashboardStats: async (teacherId: string) => {
     const [upcomingSessions, trialBookings, averageRating, monthlyEarnings] = await Promise.all([
       getUpcomingSessions(SessionModel, teacherId),
       getTrialBookings(bookingModel, teacherId),
@@ -29,7 +29,7 @@ export const teacherDashboardService = {
 };
 
 export const StudentDashboardService = {
-  async getWeeklySchedule(query: WeeklyScheduleQuery): Promise<WeeklyScheduleResponse> {
+  async getWeeklySchedule(query: any) {
     const { studentId, startDate, endDate } = query;
 
     // Fetch sessions from database with populated references
@@ -52,11 +52,10 @@ export const StudentDashboardService = {
       .lean();
 
     // Group sessions by day
-    const dayMap = new Map<string, SessionCard[]>();
+    const dayMap = new Map<string, any[]>();
 
     sessions.forEach((session: any) => {
       const sessionDate = new Date(session.start);
-      // FIX: Use local date instead of UTC
       const dateKey = sessionDate.toLocaleDateString('en-CA');
 
       if (!dayMap.has(dateKey)) {
@@ -67,7 +66,7 @@ export const StudentDashboardService = {
         (new Date(session.end).getTime() - new Date(session.start).getTime()) / (1000 * 60)
       );
 
-      const sessionCard: SessionCard = {
+      const sessionCard: any = {
         sessionId: session._id.toString(),
         lessonName: session.lesson?.title || 'Unknown Lesson',
         teacherName: session.teacher?.name || 'Unknown Teacher',
@@ -76,12 +75,11 @@ export const StudentDashboardService = {
         endTime: session.end,
         status: session.status
       };
-
       dayMap.get(dateKey)!.push(sessionCard);
     });
 
     // Generate all days in the week range
-    const days: DaySchedule[] = [];
+    const days: any = [];
     const currentDate = new Date(startDate);
 
     while (currentDate <= endDate) {

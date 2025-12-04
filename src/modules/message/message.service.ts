@@ -1,3 +1,5 @@
+import bookingModel from '../../models/booking.model';
+import { Course } from '../../models/course.model';
 import messageModel from '../../models/message.model';
 import messageThreadModel from '../../models/messageThread.model';
 import { User } from '../../models/user.model';
@@ -104,18 +106,103 @@ const messageService = {
   /**
    * List all teachers (for new message modal)
    */
-  listTeachers: async (userRole: string) => {
-    const role = ['student', 'parent'].includes(userRole)
-      ? { role: 'teacher' }
-      : { role: { $in: ['student', 'parent'] } };
+  listTeachers: async (userRole: string, userId: string) => {
+    if (['student', 'parent'].includes(userRole)) {
+      // For students/parents: Find teachers from their purchased courses
 
-    const teachers = await User.find(role)
-      .populate('profileImage', 'url')
-      .select('name email')
-      .limit(50)
-      .sort({ name: 1 });
+      // Step 1: Find all bookings for this user (or their children if parent)
+      const bookingFilter: any = {};
 
-    return teachers;
+      if (userRole === 'parent') {
+        // Get parent's children by querying students with this parent ID
+        const children = await User.find({
+          parent: userId,
+          role: 'student'
+        }).select('_id');
+
+        const childrenIds = children.map(child => child._id);
+        bookingFilter.student = { $in: childrenIds };
+      } else {
+        bookingFilter.student = userId;
+      }
+
+      // Get all bookings with paid/not_required status
+      const bookings = await bookingModel
+        .find({
+          ...bookingFilter,
+          paymentStatus: { $in: ['PAID', 'NOT_REQUIRED'] }
+        })
+        .distinct('course');
+
+      if (bookings.length === 0) {
+        return [];
+      }
+
+      // Step 2: Find all teachers from these courses
+      const courses = await Course.find({
+        _id: { $in: bookings }
+      }).distinct('teachers');
+
+      // Step 3: Get teacher details
+      const teachers = await User.find({
+        _id: { $in: courses },
+        role: 'teacher'
+      })
+        .populate('profileImage', 'url')
+        .select('name email')
+        .limit(50)
+        .sort({ name: 1 });
+
+      return teachers;
+    } else if (userRole === 'teacher') {
+      // For teachers: Find students from courses they're teaching
+
+      // Step 1: Find all courses where this teacher is assigned
+      const courses = await Course.find({
+        teachers: userId
+      }).distinct('_id');
+
+      if (courses.length === 0) {
+        return [];
+      }
+
+      // Step 2: Find all students who have booked these courses
+      const studentIds = await bookingModel
+        .find({
+          course: { $in: courses },
+          paymentStatus: { $in: ['PAID', 'NOT_REQUIRED'] }
+        })
+        .distinct('student');
+
+      // Step 3: Get the students and find their parents
+      const students = await User.find({
+        _id: { $in: studentIds }
+      }).select('_id parent role');
+
+      // Separate students with parents and students without parents
+      const parentIds = students.filter(student => student.parent).map(student => student.parent);
+
+      const independentStudentIds = students
+        .filter(student => !student.parent && student.role === 'student')
+        .map(student => student._id);
+
+      // Step 4: Get parent and independent student details
+      const users = await User.find({
+        $or: [
+          { _id: { $in: parentIds }, role: 'parent' },
+          { _id: { $in: independentStudentIds }, role: 'student' }
+        ]
+      })
+        .populate('profileImage', 'url')
+        .select('name email role')
+        .limit(50)
+        .sort({ name: 1 });
+
+      return users;
+    } else {
+      // For other roles (school, etc.), return empty or implement custom logic
+      return [];
+    }
   },
 
   /**

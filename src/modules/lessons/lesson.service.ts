@@ -464,6 +464,17 @@ export const LessonService = {
   },
 
   async remove(id: string) {
+    const lesson: any = await Lesson.findById(id).populate('courseId').lean();
+    if (!lesson) return null;
+
+    if (lesson.courseId.enrolledCount > 0) {
+      const e = new Error('Lesson cannot be removed because student is already enrolled');
+      (e as any).code = '409_CONFLICT_OVERLAP';
+      throw e;
+    }
+    const session = await SessionModel.findOneAndDelete({ lesson: new Types.ObjectId(id) }).lean();
+    if (!session) return null;
+
     const removed = await Lesson.findByIdAndDelete(id).lean();
     if (removed) {
       const hasTrial = await Lesson.exists({
@@ -698,7 +709,7 @@ export const LessonService = {
       .lean();
 
     const studentIds = enrolledStudents.map((booking: any) => booking.student.toString());
-    console.log(studentIds);
+
     if (sessionsToUpdate.length > 0) {
       await Promise.all(
         sessionsToUpdate.map(async ({ lessonId, startAt, endAt }) => {

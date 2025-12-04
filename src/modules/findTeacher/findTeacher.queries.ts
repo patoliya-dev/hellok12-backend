@@ -77,6 +77,30 @@ export const findTeacherQuery = ({ filters = {}, priceRange, offset, limit }: an
     pipeline.push({ $match: profileMatchFilters });
   }
 
+  // Availability
+  if (filters.availability) {
+    pipeline.push({
+      $lookup: {
+        from: 'teacherschedules',
+        localField: '_id',
+        foreignField: 'teacherId',
+        as: 'schedule'
+      }
+    });
+    pipeline.push({
+      $unwind: {
+        path: '$schedule'
+      }
+    });
+    const availabilityMatch = buildAvailabilityMatch(filters.availability);
+
+    if (availabilityMatch) {
+      pipeline.push({
+        $match: availabilityMatch
+      });
+    }
+  }
+
   // Lookup feedbacks
   pipeline.push({
     $lookup: {
@@ -258,7 +282,7 @@ export const findTeacherQuery = ({ filters = {}, priceRange, offset, limit }: an
     }
   });
 
-  // Project
+  // Project (exclude schedule from final output)
   pipeline.push({
     $project: {
       _id: 1,
@@ -283,286 +307,209 @@ export const findTeacherQuery = ({ filters = {}, priceRange, offset, limit }: an
   return pipeline;
 };
 
+/**
+ * Build MongoDB match condition for availability filter
+ */
+function buildAvailabilityMatch(availability: any) {
+  if (!availability) return null;
+
+  const { type, value, start, end, dates } = availability;
+
+  switch (type) {
+    case 'single':
+      return buildSingleDateMatch(value);
+
+    case 'range':
+      return buildDateRangeMatch(start, end);
+
+    case 'multiple':
+      return buildMultipleDatesMatch(dates);
+
+    default:
+      return null;
+  }
+}
+
+/**
+ * Check if teacher has availability on a single date/datetime
+ */
+function buildSingleDateMatch(dateString: string) {
+  const parsedDate = new Date(dateString);
+  const dateOnly = dateString.split('T')[0]; // "2025-12-05"
+  const dayOfWeek = parsedDate.getDay(); // 0-6
+  const yearMonth = dateOnly.substring(0, 7); // "2025-12"
+
+  let timeInMinutes: number | null = null;
+  if (dateString.includes('T')) {
+    const time = dateString.split('T')[1];
+    const [hours, minutes] = time.split(':').map(Number);
+    timeInMinutes = hours * 60 + minutes;
+  }
+
+  const conditions: any[] = [];
+
+  if (timeInMinutes !== null) {
+    conditions.push({
+      $or: [
+        { [`schedule.overrides.${dateOnly}`]: timeInMinutes },
+        {
+          $and: [
+            { [`schedule.overrides.${dateOnly}`]: { $exists: false } },
+            { [`schedule.monthly.${yearMonth}.${dayOfWeek}`]: timeInMinutes }
+          ]
+        },
+        {
+          $and: [
+            { [`schedule.overrides.${dateOnly}`]: { $exists: false } },
+            { [`schedule.monthly.${yearMonth}`]: { $exists: false } },
+            { [`schedule.weekly.${dayOfWeek}`]: timeInMinutes }
+          ]
+        }
+      ]
+    });
+  } else {
+    conditions.push({
+      $or: [
+        {
+          $and: [
+            { [`schedule.overrides.${dateOnly}`]: { $exists: true } },
+            { [`schedule.overrides.${dateOnly}`]: { $ne: [] } }
+          ]
+        },
+        {
+          $and: [
+            { [`schedule.overrides.${dateOnly}`]: { $exists: false } },
+            { [`schedule.monthly.${yearMonth}.${dayOfWeek}`]: { $exists: true } },
+            { [`schedule.monthly.${yearMonth}.${dayOfWeek}`]: { $ne: [] } }
+          ]
+        },
+        // Check weekly baseline has slots
+        {
+          $and: [
+            { [`schedule.overrides.${dateOnly}`]: { $exists: false } },
+            { [`schedule.monthly.${yearMonth}`]: { $exists: false } },
+            { [`schedule.weekly.${dayOfWeek}`]: { $exists: true } },
+            { [`schedule.weekly.${dayOfWeek}`]: { $ne: [] } }
+          ]
+        }
+      ]
+    });
+  }
+
+  return { $and: conditions };
+}
+
+/**
+ * Check if teacher has ANY schedule setup that MIGHT overlap
+ */
+function buildDateRangeMatch(startDate: string, endDate: string) {
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+
+  const monthsInRange = new Set<string>();
+  const daysOfWeekInRange = new Set<number>();
+
+  const currentDate = new Date(start);
+  while (currentDate <= end) {
+    const yearMonth = currentDate.toISOString().substring(0, 7); // "2025-12"
+    const dayOfWeek = currentDate.getDay(); // 0-6
+
+    monthsInRange.add(yearMonth);
+    daysOfWeekInRange.add(dayOfWeek);
+
+    currentDate.setDate(currentDate.getDate() + 1);
+  }
+
+  const conditions: any[] = [];
+
+  const overrideConditions: any[] = [];
+  const checkDate = new Date(start);
+  while (checkDate <= end) {
+    const dateKey = checkDate.toISOString().split('T')[0];
+    overrideConditions.push({
+      $and: [
+        { [`schedule.overrides.${dateKey}`]: { $exists: true } },
+        { [`schedule.overrides.${dateKey}`]: { $ne: [] } }
+      ]
+    });
+    checkDate.setDate(checkDate.getDate() + 1);
+  }
+  if (overrideConditions.length > 0) {
+    conditions.push({ $or: overrideConditions });
+  }
+
+  const monthlyConditions: any[] = [];
+  monthsInRange.forEach(yearMonth => {
+    daysOfWeekInRange.forEach(dayOfWeek => {
+      monthlyConditions.push({
+        $and: [
+          { [`schedule.monthly.${yearMonth}.${dayOfWeek}`]: { $exists: true } },
+          { [`schedule.monthly.${yearMonth}.${dayOfWeek}`]: { $ne: [] } }
+        ]
+      });
+    });
+  });
+  if (monthlyConditions.length > 0) {
+    conditions.push({ $or: monthlyConditions });
+  }
+
+  const weeklyConditions: any[] = [];
+  daysOfWeekInRange.forEach(dayOfWeek => {
+    weeklyConditions.push({
+      $and: [
+        { [`schedule.weekly.${dayOfWeek}`]: { $exists: true } },
+        { [`schedule.weekly.${dayOfWeek}`]: { $ne: [] } }
+      ]
+    });
+  });
+  if (weeklyConditions.length > 0) {
+    conditions.push({ $or: weeklyConditions });
+  }
+
+  return conditions.length > 0 ? { $or: conditions } : null;
+}
+
+/**
+ * Check if teacher has availability on multiple specific dates
+ */
+function buildMultipleDatesMatch(dates: string[]) {
+  const dateConditions = dates.map(dateString => {
+    const parsedDate = new Date(dateString);
+    const dateOnly = dateString.split('T')[0];
+    const dayOfWeek = parsedDate.getDay();
+    const yearMonth = dateOnly.substring(0, 7);
+
+    return {
+      $or: [
+        {
+          $and: [
+            { [`schedule.overrides.${dateOnly}`]: { $exists: true } },
+            { [`schedule.overrides.${dateOnly}`]: { $ne: [] } }
+          ]
+        },
+        {
+          $and: [
+            { [`schedule.overrides.${dateOnly}`]: { $exists: false } },
+            { [`schedule.monthly.${yearMonth}.${dayOfWeek}`]: { $exists: true } },
+            { [`schedule.monthly.${yearMonth}.${dayOfWeek}`]: { $ne: [] } }
+          ]
+        },
+        {
+          $and: [
+            { [`schedule.overrides.${dateOnly}`]: { $exists: false } },
+            { [`schedule.monthly.${yearMonth}`]: { $exists: false } },
+            { [`schedule.weekly.${dayOfWeek}`]: { $exists: true } },
+            { [`schedule.weekly.${dayOfWeek}`]: { $ne: [] } }
+          ]
+        }
+      ]
+    };
+  });
+  return { $and: dateConditions };
+}
+
 export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
   const pipeline: any[] = [];
-
-  // Match teacherId
-  pipeline.push({
-    $match: {
-      _id: new Types.ObjectId(teacherId),
-      role: 'teacher'
-    }
-  });
-
-  // Lookup profile
-  pipeline.push({
-    $lookup: {
-      from: 'teacherprofiles',
-      localField: '_id',
-      foreignField: 'user',
-      as: 'profile'
-    }
-  });
-
-  // Unwind profile - keep doc even if profile missing (defensive)
-  pipeline.push({ $unwind: { path: '$profile', preserveNullAndEmptyArrays: true } });
-
-  // Lookup profileImage
-  pipeline.push({
-    $lookup: {
-      from: 'attachments',
-      localField: '_id',
-      foreignField: 'entityId',
-      pipeline: [{ $match: { status: 'READY', entityType: 'User' } }, { $project: { url: 1 } }],
-      as: 'profileImage'
-    }
-  });
-
-  // Add profileImage
-  pipeline.push({
-    $addFields: { profileImage: { $arrayElemAt: ['$profileImage.url', 0] } }
-  });
-
-  // Lookup highlights (profile.highlights may be missing or empty - lookup handles that)
-  pipeline.push({
-    $lookup: {
-      from: 'attachments',
-      localField: 'profile.highlights',
-      foreignField: '_id',
-      pipeline: [
-        { $match: { status: 'READY', entityType: 'TeacherProfile' } },
-        {
-          $project: {
-            url: 1,
-            key: 1,
-            name: 1,
-            size: 1,
-            createdAt: 1,
-            updatedAt: 1,
-            mime: 1
-          }
-        }
-      ],
-      as: 'highlights'
-    }
-  });
-
-  // Add highlights
-  pipeline.push({
-    $addFields: {
-      highlights: {
-        $cond: [{ $gt: [{ $size: '$highlights' }, 0] }, '$highlights', []]
-      }
-    }
-  });
-
-  // Lookup intro
-  pipeline.push({
-    $lookup: {
-      from: 'attachments',
-      localField: 'profile.intro',
-      foreignField: '_id',
-      pipeline: [
-        { $match: { status: 'READY', entityType: 'TeacherProfile' } },
-        {
-          $project: {
-            url: 1,
-            key: 1,
-            name: 1,
-            size: 1,
-            createdAt: 1,
-            updatedAt: 1,
-            mime: 1
-          }
-        }
-      ],
-      as: 'intro'
-    }
-  });
-
-  // Add intro
-  pipeline.push({
-    $addFields: {
-      intro: {
-        $cond: [{ $gt: [{ $size: '$intro' }, 0] }, { $arrayElemAt: ['$intro', 0] }, null]
-      }
-    }
-  });
-
-  // Lookup FeedbackRatings And count reviews and other operations
-  pipeline.push({
-    $lookup: {
-      from: 'feedbackratings',
-      localField: '_id',
-      foreignField: 'teacher',
-      pipeline: [
-        { $sort: { createdAt: -1 } }, // Sort by latest first
-        { $limit: 10 }, // Get only latest 10 reviews
-        {
-          $lookup: {
-            from: 'lessons',
-            localField: 'lesson',
-            foreignField: '_id',
-            as: 'lesson'
-          }
-        },
-        {
-          $lookup: {
-            from: 'users',
-            localField: 'author',
-            foreignField: '_id',
-            pipeline: [
-              {
-                $lookup: {
-                  from: 'attachments',
-                  localField: '_id',
-                  foreignField: 'entityId',
-                  pipeline: [
-                    { $match: { status: 'READY', entityType: 'User' } },
-                    { $project: { url: 1 } }
-                  ],
-                  as: 'profileImage'
-                }
-              },
-              {
-                $addFields: { profileImage: { $arrayElemAt: ['$profileImage.url', 0] } }
-              },
-              {
-                $project: {
-                  _id: 1,
-                  name: 1,
-                  profileImage: 1
-                }
-              }
-            ],
-            as: 'author'
-          }
-        },
-        {
-          $addFields: {
-            lesson: {
-              $arrayElemAt: ['$lesson', 0]
-            },
-            author: {
-              $arrayElemAt: ['$author', 0]
-            }
-          }
-        },
-        {
-          $project: {
-            rating: 1,
-            comment: 1,
-            author: 1,
-            createdAt: 1,
-            lesson: 1
-          }
-        }
-      ],
-      as: 'feedbacks'
-    }
-  });
-
-  // Add averageRating and reviewsCount
-  pipeline.push({
-    $addFields: {
-      averageRating: {
-        $cond: [{ $gt: [{ $size: '$feedbacks' }, 0] }, { $avg: '$feedbacks.rating' }, null]
-      },
-      reviewsCount: { $size: '$feedbacks' }
-    }
-  });
-
-  // Lookup Courses -> studentStats (make $in robust with $ifNull)
-  pipeline.push({
-    $lookup: {
-      from: 'courses',
-      let: { teacherId: '$_id' },
-      pipeline: [
-        {
-          $match: {
-            $expr: { $in: ['$$teacherId', { $ifNull: ['$teachers', []] }] },
-            status: 'active'
-          }
-        },
-        {
-          $group: {
-            _id: null,
-            totalStudents: { $sum: { $ifNull: ['$enrolledCount', 0] } }
-          }
-        }
-      ],
-      as: 'studentStats'
-    }
-  });
-
-  // Add studentsTaught
-  pipeline.push({
-    $addFields: {
-      studentsTaught: {
-        $ifNull: [{ $arrayElemAt: ['$studentStats.totalStudents', 0] }, 0]
-      }
-    }
-  });
-
-  // Lookup Courses -> course list (again make $in robust)
-  pipeline.push({
-    $lookup: {
-      from: 'courses',
-      let: { teacherId: '$_id' },
-      pipeline: [
-        {
-          $match: {
-            $expr: { $in: ['$$teacherId', { $ifNull: ['$teachers', []] }] },
-            status: 'active'
-          }
-        },
-        {
-          $project: {
-            title: 1,
-            description: 1,
-            enrolledCount: 1,
-            price: 1,
-            startDate: 1,
-            endDate: 1,
-            language: 1,
-            studentCapacity: 1,
-            lessonType: 1,
-            location: 1,
-            isTrialAvailable: 1,
-            mode: 1
-          }
-        }
-      ],
-      as: 'courses'
-    }
-  });
-
-  // Add available Courses Count
-  pipeline.push({
-    $addFields: {
-      availableCoursesCount: {
-        $size: {
-          $filter: {
-            input: '$courses',
-            as: 'course',
-            cond: {
-              $or: [
-                { $eq: ['$$course.lessonType', '1-on-1'] },
-                {
-                  $and: [
-                    { $eq: ['$$course.lessonType', 'group'] },
-                    { $lt: ['$$course.enrolledCount', '$$course.studentCapacity'] }
-                  ]
-                }
-              ]
-            }
-          }
-        }
-      }
-    }
-  });
-
-  // Project
   pipeline.push({
     $project: {
       _id: 1,

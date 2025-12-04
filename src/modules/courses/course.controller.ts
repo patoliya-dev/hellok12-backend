@@ -4,6 +4,7 @@ import { courseCreateSchema, courseUpdateSchema, listQuerySchema } from './cours
 import { CourseService } from './course.service';
 import { USER_ROLES } from '../../utils/constants';
 import { ValidatedRequest } from '../../middlewares/validation';
+import { normalizeTimezone } from '../lessons/lesson.util';
 
 export const createCourse = async (req: ValidatedRequest, res: Response) => {
   const parsed = courseCreateSchema.safeParse(req.body);
@@ -18,7 +19,10 @@ export const createCourse = async (req: ValidatedRequest, res: Response) => {
       }
     | undefined = { role, id: req.user!.id };
 
-  const course = await CourseService.create(parsed.data, owner);
+  const rawTz = req.userTimezone || 'UTC';
+  const timezone = normalizeTimezone(rawTz);
+
+  const course = await CourseService.create(parsed.data, owner, timezone);
   return res.status(201).json(createSuccessResponse(course, 'Created', 201));
 };
 
@@ -38,7 +42,10 @@ export const updateCourse = async (req: Request, res: Response) => {
         }
       | undefined = { role, id: req.user!.id };
 
-    const updated = await CourseService.update(req.params.id, parsed.data, owner);
+    const rawTz = req.userTimezone || 'UTC';
+    const timezone = normalizeTimezone(rawTz);
+
+    const updated = await CourseService.update(req.params.id, parsed.data, owner, timezone);
 
     if (!updated) {
       return res.status(404).json(createErrorResponse('Course not found', 'Not found', 404));
@@ -102,7 +109,10 @@ export const listCourses = async (req: Request, res: Response) => {
       }
     | undefined = role ? { role, id: req.user!.id } : undefined;
 
-  const result = await CourseService.list({ ...parsed.data, owner });
+  const rawTz = req.userTimezone || 'UTC';
+  const timezone = normalizeTimezone(rawTz);
+
+  const result = await CourseService.list({ ...parsed.data, owner, timezone });
   return res.json(createSuccessResponse(result));
 };
 

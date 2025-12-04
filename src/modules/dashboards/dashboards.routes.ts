@@ -1,5 +1,6 @@
 import { authenticate, authorize } from '../../middlewares/auth';
-import { getDashboardStatsController } from './dashboards.controller';
+import { USER_ROLES } from '../../utils/constants';
+import { getDashboardStatsController, getWeeklySchedule } from './dashboards.controller';
 import { Router } from 'express';
 
 const r = Router();
@@ -10,5 +11,11 @@ const r = Router();
  * @access  Private (Teacher only)
  */
 r.get('/', authenticate, authorize(['teacher']), getDashboardStatsController);
+r.get(
+  '/weekly-schedule/:studentId',
+  authenticate,
+  authorize([USER_ROLES.PARENT, USER_ROLES.STUDENT]),
+  getWeeklySchedule
+);
 
 export default r;

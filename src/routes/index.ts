@@ -13,6 +13,7 @@ import messageRoutes from '../modules/message/message.routes';
 import feedbackRatingRoutes from '../modules/feedbacks/feedbacks.routes';
 import dashboardRoutes from '../modules/dashboards/dashboards.routes';
 import earningsRoutes from '../modules/earnings/earnings.routes';
+import progressRoutes from '../modules/progress/progress.routes';
 
 // Future imports:
 // import userRoutes from './user.routes';
@@ -36,7 +37,9 @@ router.use('/webhook', webhookRoutes);
 router.use('/messages', messageRoutes);
 router.use('/feedbacks', feedbackRatingRoutes);
 router.use('/teachers/dashboard', dashboardRoutes);
+router.use('/students/dashboard', dashboardRoutes);
 router.use('/earnings', earningsRoutes);
+router.use('/progress', progressRoutes);
 
 // Future routes:
 // router.use('/users', userRoutes);

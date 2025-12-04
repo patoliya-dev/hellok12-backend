@@ -24,4 +24,16 @@ r.get(
  */
 r.get('/stats/:teacherId', feedbackRatingsController.getFeedbackStats);
 
+/**
+ * @route   POST /api/feedback-ratings
+ * @desc    Create a new feedback rating
+ * @access  Private
+ */
+r.post(
+  '/',
+  authenticate,
+  authorize([USER_ROLES.PARENT, USER_ROLES.STUDENT]),
+  feedbackRatingsController.create
+);
+
 export default r;

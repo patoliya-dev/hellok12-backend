@@ -42,6 +42,9 @@ export const authenticate = async (
       return;
     }
 
+    const headerTz = (req.headers['x-timezone'] as string) || '';
+    req.userTimezone = headerTz || 'UTC';
+
     // Set the validated user payload
     req.user = {
       id: decoded.id,

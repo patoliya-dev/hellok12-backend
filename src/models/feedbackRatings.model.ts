@@ -21,27 +21,20 @@ const feedbackRatingSchema = new Schema<IFeedbackRating, IFeedbackRatingModel>(
   {
     lesson: {
       type: Schema.Types.ObjectId,
-      ref: 'Lesson',
-      required: [true, 'Lesson is required'],
-      index: true
+      ref: 'Lesson'
     },
     course: {
       type: Schema.Types.ObjectId,
-      ref: 'Course',
-      required: [true, 'Course is required'],
-      index: true
+      ref: 'Course'
     },
     author: {
       type: Schema.Types.ObjectId,
       ref: 'User',
-      required: [true, 'Author is required'],
-      index: true
+      required: [true, 'Author is required']
     },
     teacher: {
       type: Schema.Types.ObjectId,
-      ref: 'User',
-      required: [true, 'Teacher is required'],
-      index: true
+      ref: 'User'
     },
     rating: {
       type: Number,
@@ -69,7 +62,6 @@ const feedbackRatingSchema = new Schema<IFeedbackRating, IFeedbackRatingModel>(
 
 // Compound indexes for common queries
 feedbackRatingSchema.index({ teacher: 1, createdAt: -1 });
-feedbackRatingSchema.index({ lesson: 1, author: 1 }, { unique: true }); // Prevent duplicate ratings
 feedbackRatingSchema.index({ course: 1, rating: -1 });
 feedbackRatingSchema.index({ author: 1, createdAt: -1 });
 

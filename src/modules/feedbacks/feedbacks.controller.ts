@@ -87,5 +87,46 @@ export const feedbackRatingsController = {
     } catch (error: any) {
       res.status(500).json(createErrorResponse(error));
     }
+  },
+
+  create: async (req: Request<{ teacherId: string }>, res: Response): Promise<void> => {
+    try {
+      const { teacherId, rating, comment, authorId } = req.body;
+
+      if (!Types.ObjectId.isValid(teacherId)) {
+        res.status(400).json({
+          success: false,
+          error: 'Invalid teacher ID'
+        });
+        return;
+      }
+
+      if (!rating || rating < 1 || rating > 5) {
+        res.status(400).json({
+          success: false,
+          error: 'Rating must be between 1 and 5'
+        });
+        return;
+      }
+
+      if (!comment || comment.length < 10) {
+        res.status(400).json({
+          success: false,
+          error: 'Comment must be at least 10 characters'
+        });
+        return;
+      }
+
+      const feedback = await feedbackRatingsService.createFeedback({
+        authorId,
+        teacherId,
+        rating,
+        comment
+      });
+
+      res.status(201).json({ success: true, data: feedback });
+    } catch (err: any) {
+      res.status(400).json({ success: false, message: err.message });
+    }
   }
 };

@@ -38,7 +38,7 @@ const sessionService = {
         course: courseId,
         lesson: lessonId,
         teacher: teacherId,
-        // students: students.length > 0 ? students : ((course as any).students || []).map((s: any) => s._id), //Enrollments
+        students: students, //Enrollments
         start,
         end,
         status: SessionStatus.SCHEDULED
@@ -48,7 +48,7 @@ const sessionService = {
 
       if (!zoomService.isConfigured()) {
         Logger.warning('Zoom not configured. Session created without meeting link.');
-      } else {
+      } else if (course.mode === 'online') {
         try {
           const duration = zoomService.calculateDuration(start, end);
           const zoomMeeting = await zoomService.createMeeting({
@@ -83,7 +83,7 @@ const sessionService = {
       }
 
       const session = await SessionModel.create(sessionData);
-
+      console.log(session);
       const populatedSession = await SessionModel.findById(session._id)
         .populate('teacher', 'name email profileImage')
         // .populate('students', 'name email profileImage')
@@ -103,11 +103,11 @@ const sessionService = {
     teacherId: string;
     start: Date;
     end: Date;
+    students?: string[];
   }) => {
     try {
-      const { lessonId, courseId, teacherId, start, end } = lessonData;
+      const { lessonId, courseId, teacherId, start, end, students } = lessonData;
 
-      // Find existing session
       const existingSession = await SessionModel.findOne({ lesson: lessonId });
 
       if (!existingSession) {
@@ -117,7 +117,8 @@ const sessionService = {
           courseId,
           teacherId,
           start,
-          end
+          end,
+          students
         });
       }
 
@@ -136,7 +137,8 @@ const sessionService = {
         start,
         end,
         teacher: teacherId,
-        course: courseId
+        course: courseId,
+        students: students || existingSession.students
       };
 
       // If Zoom is configured and session has a meeting, update it
@@ -197,6 +199,7 @@ const sessionService = {
       }
 
       // Update the session
+
       const updatedSession = await SessionModel.findByIdAndUpdate(
         existingSession._id,
         { $set: updateData },

@@ -38,6 +38,7 @@ const messageController = {
   listTeachers: async (req: Request, res: Response) => {
     try {
       const userRole = req.user?.role;
+      const userId = req.user?.id;
 
       if (!userRole) {
         return res.status(401).json({
@@ -45,7 +46,7 @@ const messageController = {
         });
       }
 
-      const teachers = await messageService.listTeachers(userRole as string);
+      const teachers = await messageService.listTeachers(userRole as string, userId as string);
       return res.status(200).json({
         message: 'Teachers retrieved successfully',
         data: teachers || []

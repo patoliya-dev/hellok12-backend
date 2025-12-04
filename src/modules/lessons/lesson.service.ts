@@ -1,8 +1,9 @@
+import { DateTime } from 'luxon';
+import { FilterQuery, Types } from 'mongoose';
 import { Lesson, LessonDoc } from '../../models/lesson.model';
 import { Course } from '../../models/course.model';
-import { FilterQuery, Types } from 'mongoose';
 import { LessonItemInput } from './lesson.schemas';
-import { normalizeToHHMM24, parseStartEnd } from './lesson.util';
+import { getDayRangeFromISO, normalizeToHHMM24, parseStartEnd } from './lesson.util';
 import { SessionModel, SessionStatus } from '../../models/sessions.model';
 import {
   addPaginationToPipeline,
@@ -68,7 +69,7 @@ interface PaginatedResponse {
   pendingCount: number;
 }
 
-type CreateArgs = { courseId: Types.ObjectId; lessons: LessonItemInput[] };
+type CreateArgs = { courseId: Types.ObjectId; lessons: LessonItemInput[]; timeZone?: string };
 type UpdateArgs = {
   courseId: Types.ObjectId;
   updates: Array<{
@@ -83,6 +84,7 @@ type UpdateArgs = {
     vocabulary?: string[];
   }>;
   deletes: string[];
+  timeZone?: string;
 };
 
 type ListOpts = {
@@ -162,18 +164,22 @@ async function checkOverlap({
   endAt: Date;
   exceptId?: Types.ObjectId;
 }) {
-  const q: any = {
+  const query: any = {
     teacherId,
     courseId,
     status: { $ne: 'archived' },
+    // find any lesson where start < endAt and end > startAt
     startAt: { $lt: endAt },
     endAt: { $gt: startAt }
   };
-  if (exceptId) q._id = { $ne: exceptId };
-  const clash = await Lesson.findOne(q).select({ _id: 1 }).lean();
+  if (exceptId) query._id = { $ne: exceptId };
+  const clash = await Lesson.findOne(query)
+    .select({ _id: 1, title: 1, startAt: 1, endAt: 1 })
+    .lean();
   if (clash) {
-    const e = new Error('Lesson time overlaps with an existing lesson');
-    (e as any).code = '409_CONFLICT_OVERLAP';
+    const e: any = new Error('Lesson time overlaps with an existing lesson');
+    e.code = '409_CONFLICT_OVERLAP';
+    e.meta = { clash };
     throw e;
   }
 }
@@ -193,12 +199,12 @@ async function recomputeCourseTrialAvailability(courseId: Types.ObjectId) {
 }
 
 // Helper functions for calendar
-function formatTime(date: Date): string {
-  return date.toLocaleTimeString('en-US', {
+function formatTime(date: Date, timeZone: string): string {
+  return date.toLocaleTimeString(undefined, {
     hour: '2-digit',
     minute: '2-digit',
     hour12: true,
-    timeZone: 'UTC'
+    timeZone
   });
 }
 
@@ -211,13 +217,22 @@ export const LessonService = {
     userId: Types.ObjectId | string,
     userRole: 'teacher' | 'student' | 'school',
     month: number,
-    year: number
+    year: number,
+    timeZone: string
   ) {
     const uid = typeof userId === 'string' ? new Types.ObjectId(userId) : userId;
     const role = userRole?.toLowerCase();
 
-    const startOfMonth = new Date(year, month - 1, 1, 0, 0, 0, 0);
-    const endOfMonth = new Date(year, month, 0, 23, 59, 59, 999);
+    // choose a timezone. If controller passes user timezone, receive it (see below).
+    // For teacher/student views prefer user's timezone; if not available default to UTC.
+    const startOfMonth = DateTime.fromObject({ year, month }, { zone: timeZone })
+      .startOf('month')
+      .toUTC()
+      .toJSDate();
+    const endOfMonth = DateTime.fromObject({ year, month }, { zone: timeZone })
+      .endOf('month')
+      .toUTC()
+      .toJSDate();
 
     // Build user filter
     const userFilter: any = {};
@@ -269,7 +284,7 @@ export const LessonService = {
       monthOverview[dateKey].lessons.push({
         id: session._id.toString(),
         title: (session.lesson as any)?.title || 'Untitled',
-        time: formatTime(session.start)
+        time: formatTime(session.start, timeZone)
       });
     }
 
@@ -288,7 +303,8 @@ export const LessonService = {
   async getSessionsByDate(
     userId: Types.ObjectId | string,
     userRole: 'teacher' | 'student' | 'school',
-    date: string
+    date: string,
+    timeZone: string = 'UTC'
   ) {
     const uid = typeof userId === 'string' ? new Types.ObjectId(userId) : userId;
     const role = userRole?.toLowerCase();
@@ -299,8 +315,16 @@ export const LessonService = {
     const m = parseInt(monthStr) - 1;
     const d = parseInt(dayStr);
 
-    const startOfDay = new Date(y, m, d, 0, 0, 0, 0);
-    const endOfDay = new Date(y, m, d, 23, 59, 59, 999);
+    // import { DateTime } from 'luxon';
+    // tz should be passed from controller (req.userTimezone), default UTC if not provided
+    const startOfDay = DateTime.fromObject({ year: y, month: m + 1, day: d }, { zone: timeZone })
+      .startOf('day')
+      .toUTC()
+      .toJSDate();
+    const endOfDay = DateTime.fromObject({ year: y, month: m + 1, day: d }, { zone: timeZone })
+      .endOf('day')
+      .toUTC()
+      .toJSDate();
 
     // Build user filter
     const userFilter: any = {};
@@ -336,7 +360,7 @@ export const LessonService = {
     return sessions.map((s, idx) => ({
       _id: s._id,
       title: (s.lesson as any)?.title || 'Untitled',
-      time: formatTime(s.start),
+      time: formatTime(s.start, timeZone),
       duration: calculateDuration(s.start, s.end),
       status: s.status,
       courseTitle: (s.course as any)?.title,
@@ -345,12 +369,9 @@ export const LessonService = {
     }));
   },
 
-  async getLessonsDashboard(userId: string) {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-
-    const end = new Date();
-    end.setHours(23, 59, 59, 999);
+  async getLessonsDashboard(userId: string, timeZone: string) {
+    const start = DateTime.now().setZone(timeZone).startOf('day').toUTC().toJSDate();
+    const end = DateTime.now().setZone(timeZone).endOf('day').toUTC().toJSDate();
 
     const lessons = await SessionModel.find({ teacher: userId, start: { $gte: start, $lt: end } })
       .populate({
@@ -373,7 +394,7 @@ export const LessonService = {
     return lessons;
   },
 
-  async create(data: Partial<LessonDoc>) {
+  async create(data: Partial<LessonDoc>, timeZone: string = 'UTC') {
     if (typeof data.order !== 'number') {
       const last = await Lesson.findOne({ courseId: data.courseId }).sort({ order: -1 }).lean();
       data.order = last ? (last.order || 0) + 1 : 0;
@@ -382,24 +403,22 @@ export const LessonService = {
     if (data.schedule) {
       const normalizedTime = normalizeToHHMM24((data.schedule as any).time);
       if (normalizedTime) (data.schedule as any).time = normalizedTime;
-      if (data.startAt && typeof data.startAt === 'string') {
-        data.startAt = new Date(data.startAt);
-      }
-      if (!(data as any).startAt) {
-        const { startAt, endAt } = parseStartEnd({
+      const { startAt, endAt } = await parseStartEnd(
+        {
           date: (data.schedule as any).date,
           time: (data.schedule as any).time,
           duration: (data.schedule as any).duration
-        });
-        (data as any).startAt = startAt;
-        (data as any).endAt = endAt;
-      } else {
-        if (!(data as any).endAt) {
-          const dur = Number((data.schedule as any).duration || 0);
-          (data as any).endAt = new Date((data as any).startAt.getTime() + dur * 60000);
-        }
-      }
+        },
+        undefined,
+        undefined,
+        timeZone
+      );
+      // (data as any).startAt = startAt;
+      // (data as any).endAt = endAt;
+      (data as any).startAt = new Date(startAt.toISOString());
+      (data as any).endAt = new Date(endAt.toISOString());
     }
+    console.log('data', data);
 
     const doc = await Lesson.create(data);
 
@@ -415,7 +434,7 @@ export const LessonService = {
     return doc.toObject();
   },
 
-  async update(id: string, patch: Partial<LessonDoc>) {
+  async update(id: string, patch: Partial<LessonDoc>, timeZone: string = 'UTC') {
     const before = await Lesson.findById(id).lean();
     if (!before) return null;
 
@@ -433,15 +452,25 @@ export const LessonService = {
       const normalizedTime = normalizeToHHMM24((patch.schedule as any).time);
       if (normalizedTime) (patch.schedule as any).time = normalizedTime;
       if ((patch.schedule as any).startAt) {
-        (patch as any).startAt = new Date((patch.schedule as any).startAt as any);
+        // If caller directly provided startAt, coerce to canonical UTC Date
+        (patch as any).startAt = new Date(
+          new Date((patch.schedule as any).startAt as any).toISOString()
+        );
       } else {
-        const { startAt, endAt } = parseStartEnd({
-          date: (patch.schedule as any).date ?? before.schedule?.date,
-          time: (patch.schedule as any).time ?? before.schedule?.time,
-          duration: (patch.schedule as any).duration ?? before.schedule?.duration
-        });
-        (patch as any).startAt = startAt;
-        (patch as any).endAt = endAt;
+        const { startAt, endAt } = await parseStartEnd(
+          {
+            date: (patch.schedule as any).date ?? before.schedule?.date,
+            time: (patch.schedule as any).time ?? before.schedule?.time,
+            duration: (patch.schedule as any).duration ?? before.schedule?.duration
+          },
+          undefined,
+          undefined,
+          timeZone
+        );
+
+        // Coerce
+        (patch as any).startAt = new Date(startAt.toISOString());
+        (patch as any).endAt = new Date(endAt.toISOString());
       }
     }
 
@@ -558,7 +587,7 @@ export const LessonService = {
     };
   },
 
-  async bulkCreateForCourse({ courseId, lessons }: CreateArgs) {
+  async bulkCreateForCourse({ courseId, lessons, timeZone = 'UTC' }: CreateArgs) {
     const course = await Course.findById(courseId).lean();
     if (!course) {
       const e = new Error('Course not found');
@@ -575,7 +604,7 @@ export const LessonService = {
     }
 
     let nextOrder = await getNextOrderForCourse(courseId);
-    const docs = [];
+    const docs: any[] = [];
 
     for (let i = 0; i < lessons.length; i++) {
       const l = lessons[i];
@@ -600,22 +629,66 @@ export const LessonService = {
       }
       l.schedule.time = normalizedTime;
 
-      const { startAt, endAt } = parseStartEnd(l.schedule as any);
-      await checkOverlap({ teacherId, courseId, startAt, endAt });
+      // defensive: reject schedule.date values that are full ISO with timezone offset — expect plain YYYY-MM-DD or Date object
+      if (
+        typeof l.schedule.date === 'string' &&
+        !/^\d{4}-\d{2}-\d{2}$/.test(String(l.schedule.date).trim())
+      ) {
+        const maybe = String(l.schedule.date).trim();
+        // If it's an ISO instant, fail fast (we want local date string)
+        const err = new Error(
+          'schedule.date must be YYYY-MM-DD (local date) or Date object - do not send full ISO with offsets'
+        );
+        (err as any).code = '422_VALIDATION';
+        (err as any).fields = [
+          { path: `lessons.${i}.schedule.date`, message: 'Use YYYY-MM-DD (local date)' }
+        ];
+        throw err;
+      }
+
+      const { startAt, endAt } = await parseStartEnd(
+        { date: l.schedule.date, time: l.schedule.time, duration: l.schedule.duration },
+        undefined,
+        undefined,
+        timeZone
+      );
+
+      // Coerce to canonical UTC Date objects (avoid accidental re-interpretation later)
+      const startUtc = new Date(startAt.toISOString());
+      const endUtc = new Date(endAt.toISOString());
+
+      await checkOverlap({ teacherId, courseId, startAt: startUtc, endAt: endUtc });
 
       docs.push({
         courseId,
         teacherId,
         title: l.title,
         description: l.description?.trim() ?? undefined,
-        schedule: l.schedule,
-        startAt,
-        endAt,
+        schedule: {
+          ...l.schedule, // ensure date remains a string 'YYYY-MM-DD'
+          time: l.schedule.time // normalized HH:mm
+        },
+        startAt: startUtc,
+        endAt: endUtc,
         status: l.status || 'draft',
         isTrialAvailable: !!l.isTrialAvailable,
         trialCapacity: l.isTrialAvailable ? (l.trialCapacity ?? 1) : undefined,
         order: typeof l.order === 'number' ? l.order : nextOrder++
       });
+    }
+
+    if (process.env.NODE_ENV !== 'production') {
+      // eslint-disable-next-line no-console
+      console.debug(
+        '[LessonService.bulkCreateForCourse] documents to insert (first 3):',
+        docs
+          .slice(0, 3)
+          .map(d => ({
+            startAt: d.startAt.toISOString(),
+            endAt: d.endAt.toISOString(),
+            schedule: d.schedule
+          }))
+      );
     }
 
     const created = await Lesson.insertMany(docs);
@@ -624,7 +697,7 @@ export const LessonService = {
     return { items: created.map(d => d.toObject()), count: created.length };
   },
 
-  async bulkUpdateForCourse({ courseId, updates, deletes }: UpdateArgs) {
+  async bulkUpdateForCourse({ courseId, updates, deletes, timeZone = 'UTC' }: UpdateArgs) {
     const course = await Course.findById(courseId).lean();
     if (!course) {
       const e = new Error('Course not found');
@@ -675,13 +748,28 @@ export const LessonService = {
           merged.time = nt;
         }
 
-        const { startAt, endAt } = parseStartEnd(merged as any);
-        await checkOverlap({ teacherId, courseId, startAt, endAt, exceptId: _id });
-        $set.schedule = merged;
-        $set.startAt = startAt;
-        $set.endAt = endAt;
+        const { startAt, endAt } = await parseStartEnd(
+          { date: merged.date, time: merged.time, duration: merged.duration },
+          undefined,
+          undefined,
+          timeZone
+        );
+        // Coerce to canonical UTC
+        const startUtc = new Date(startAt.toISOString());
+        const endUtc = new Date(endAt.toISOString());
 
-        sessionsToUpdate.push({ lessonId: _id.toString(), startAt, endAt });
+        await checkOverlap({
+          teacherId,
+          courseId,
+          startAt: startUtc,
+          endAt: endUtc,
+          exceptId: _id
+        });
+        $set.schedule = merged;
+        $set.startAt = startUtc;
+        $set.endAt = endUtc;
+
+        sessionsToUpdate.push({ lessonId: _id.toString(), startAt: startUtc, endAt: endUtc });
       }
 
       if (Object.keys($set).length) {
@@ -779,13 +867,8 @@ export const LessonService = {
       pendingCount
     };
   },
-
-  async getLessonsForStudent(studentId: string) {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-
-    const end = new Date();
-    end.setHours(23, 59, 59, 999);
+  async getLessonsForStudent(studentId: string, timeZone: string) {
+    const { start, end } = getDayRangeFromISO(undefined, timeZone);
 
     const lessons: any = await SessionModel.find({
       students: { $in: studentId },
@@ -855,7 +938,8 @@ export const LessonService = {
   async getStudentCalendarOverview(
     studentId: Types.ObjectId | string,
     month: number,
-    year: number
+    year: number,
+    timezone: string = 'UTC'
   ) {
     const startOfMonth = new Date(year, month - 1, 1, 0, 0, 0, 0);
     const endOfMonth = new Date(year, month, 0, 23, 59, 59, 999);
@@ -889,7 +973,7 @@ export const LessonService = {
       monthOverview[dateKey].lessons.push({
         id: session._id.toString(),
         title: (session.lesson as any)?.title || 'Untitled',
-        time: formatTime(session.start)
+        time: formatTime(session.start, timezone)
       });
     }
 
@@ -905,7 +989,11 @@ export const LessonService = {
     return { monthOverview, stats };
   },
 
-  async getStudentSessionsByDate(studentId: Types.ObjectId | string, date: string) {
+  async getStudentSessionsByDate(
+    studentId: Types.ObjectId | string,
+    date: string,
+    timezone: string = 'UTC'
+  ) {
     const [yearStr, monthStr, dayStr] = date.split('-');
     const y = parseInt(yearStr);
     const m = parseInt(monthStr) - 1;
@@ -928,7 +1016,7 @@ export const LessonService = {
     return sessions.map((s, idx) => ({
       _id: s._id,
       title: (s.lesson as any)?.title || 'Untitled',
-      time: formatTime(s.start),
+      time: formatTime(s.start, timezone),
       duration: calculateDuration(s.start, s.end),
       status: s.status,
       courseTitle: (s.course as any)?.title,

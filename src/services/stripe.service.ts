@@ -495,6 +495,24 @@ export async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent) {
           .lean();
 
         const sessionIds = (updatedSessions || []).map(s => s._id);
+
+        const update: Record<string, any> = {
+          $set: {
+            paymentStatus: 'PAID',
+            transaction: tx._id,
+            updatedAt: new Date()
+          }
+        };
+
+        if (sessionIds.length > 0) {
+          update.$addToSet = { sessions: { $each: sessionIds } };
+        }
+
+        // Filter enforces we only flip to PAID when not already PAID
+        const filter = { _id: bookingId, paymentStatus: { $ne: 'PAID' } };
+
+        await BookingModel.updateOne(filter, update).exec();
+
         // 3) Save to booking.sessions
         if (sessionIds.length > 0) {
           await BookingModel.findByIdAndUpdate(bookingId, {

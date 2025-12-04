@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
-import { Types } from 'mongoose';
 import { StudentDashboardService, teacherDashboardService } from './dashboards.service';
+import { getWeekRangeFromISO, normalizeTimezone } from '../lessons/lesson.util';
 
 export const getDashboardStatsController = async (req: Request, res: Response): Promise<void> => {
   const teacherId = req.user?.id;
@@ -29,13 +29,15 @@ export const getWeeklySchedule = async (req: Request, res: Response): Promise<Re
     let endDate: Date;
 
     if (req.query.startDate && req.query.endDate) {
-      startDate = new Date(req.query.startDate as string);
-      endDate = new Date(req.query.endDate as string);
+      // Use shared helper to normalize dates
+      const weekRange = getWeekRangeFromISO(req.query.startDate as string);
+      startDate = weekRange.start;
+      endDate = weekRange.end;
     } else {
-      // Default to current week
-      const boundaries = StudentDashboardService.getWeekBoundaries();
-      startDate = boundaries.start;
-      endDate = boundaries.end;
+      // Default current week
+      const weekRange = getWeekRangeFromISO();
+      startDate = weekRange.start;
+      endDate = weekRange.end;
     }
 
     // Validate dates
@@ -53,11 +55,14 @@ export const getWeeklySchedule = async (req: Request, res: Response): Promise<Re
       });
     }
 
+    const rawTz = req.userTimezone || 'UTC';
+    const timezone = normalizeTimezone(rawTz);
+
     const schedule = await StudentDashboardService.getWeeklySchedule({
       studentId,
       startDate,
       endDate,
-      timezone: req.query.timezone as string
+      timezone
     });
 
     return res.status(200).json({

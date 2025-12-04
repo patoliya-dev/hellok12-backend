@@ -947,22 +947,16 @@ export const authService = {
         { new: true }
       );
 
-      const updatedParent = await User.findById(userId)
-        .populate({
-          path: 'parentProfile',
-          populate: {
-            path: 'children',
-            populate: [
-              { path: 'studentProfile' },
-              { path: 'profileImage', match: { status: 'READY' }, select: 'url' }
-            ]
-          }
-        })
+      const updatedStudent = await User.findById(studentUser?._id)
+        .populate([
+          { path: 'studentProfile' },
+          { path: 'profileImage', match: { status: 'READY' }, select: 'url' }
+        ])
         .populate('profileImage')
         .lean({ virtuals: true });
 
       Logger.info('Student added successfully', { userId, studentId: studentUser._id });
-      return updatedParent;
+      return updatedStudent;
     } catch (error) {
       Logger.error('Add student to parent failed:', error);
       throw error;

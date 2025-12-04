@@ -1,3 +1,4 @@
+import { DateTime } from 'luxon';
 import { FilterQuery, Types, UpdateQuery } from 'mongoose';
 import { Course, CourseDoc } from '../../models/course.model';
 import { Lesson } from '../../models/lesson.model';
@@ -6,7 +7,22 @@ import { getCourseDetails, getFeedbacks } from './course.queries';
 import { FeedbackRating } from '../../models/feedbackRatings.model';
 
 export const CourseService = {
-  async create(data: CourseCreateDTO, owner: { role: 'school' | 'teacher'; id: string }) {
+  async create(
+    data: CourseCreateDTO,
+    owner: { role: 'school' | 'teacher'; id: string },
+    timezone: string = 'UTC'
+  ) {
+    const tz = timezone || 'UTC';
+
+    const startDateUtc = DateTime.fromJSDate(data.startDate, { zone: tz })
+      .startOf('day')
+      .toUTC()
+      .toJSDate();
+
+    const endDateUtc = data.endDate
+      ? DateTime.fromJSDate(data.endDate, { zone: tz }).endOf('day').toUTC().toJSDate()
+      : null;
+
     const payload: Partial<CourseDoc> = {
       title: data.title,
       description: data.description ?? '',
@@ -17,8 +33,8 @@ export const CourseService = {
       price: data.price,
       currency: data.currency ?? 'USD',
       ageGroups: data.ageGroups,
-      startDate: data.startDate,
-      endDate: data.endDate ?? null,
+      startDate: startDateUtc,
+      endDate: endDateUtc,
       teachers: (data.teachers ?? []).map(t => new Types.ObjectId(t)),
       // cast if present
       introImageRef: data.introImageRef ? new Types.ObjectId(data.introImageRef) : null,
@@ -38,14 +54,31 @@ export const CourseService = {
   async update(
     id: string,
     data: CourseUpdateDTO,
-    owner?: { role: 'school' | 'teacher'; id: string }
+    owner?: { role: 'school' | 'teacher'; id: string },
+    timezone: string = 'UTC'
   ) {
     const filter: FilterQuery<CourseDoc> = { _id: id };
     if (owner) {
       filter.ownerType = owner.role;
       filter.ownerId = new Types.ObjectId(owner.id);
     }
-    const updateQuery: UpdateQuery<CourseDoc> = { $set: data };
+
+    const tz = timezone || 'UTC';
+    const $set: any = { ...data };
+
+    if (data.startDate) {
+      $set.startDate = DateTime.fromJSDate(data.startDate, { zone: tz })
+        .startOf('day')
+        .toUTC()
+        .toJSDate();
+    }
+    if (data.endDate !== undefined) {
+      $set.endDate = data.endDate
+        ? DateTime.fromJSDate(data.endDate, { zone: tz }).endOf('day').toUTC().toJSDate()
+        : null;
+    }
+
+    const updateQuery: UpdateQuery<CourseDoc> = { $set };
     const doc = await Course.findOneAndUpdate(filter, updateQuery, {
       new: true,
       runValidators: true
@@ -121,12 +154,14 @@ export const CourseService = {
     priceMax?: number;
     dateFrom?: Date;
     dateTo?: Date;
+    timezone?: string;
     sortBy: string;
     page: number;
     limit: number;
     owner?: { role: 'school' | 'teacher'; id: string }; // optional dashboard scoping
   }) {
     const filter: FilterQuery<CourseDoc> = {};
+    const tz = query.timezone || 'UTC';
 
     if (query.owner) {
       filter.ownerType = query.owner.role;
@@ -147,12 +182,26 @@ export const CourseService = {
 
     if (query.dateFrom || query.dateTo) {
       // simple overlap: start within range OR (no end → >= from)
-      if (query.dateFrom && query.dateTo) {
-        filter.startDate = { $gte: query.dateFrom, $lte: query.dateTo };
-      } else if (query.dateFrom) {
-        filter.startDate = { $gte: query.dateFrom };
-      } else if (query.dateTo) {
-        filter.startDate = { $lte: query.dateTo };
+      let fromUtc: Date | undefined;
+      let toUtc: Date | undefined;
+
+      if (query.dateFrom) {
+        fromUtc = DateTime.fromJSDate(query.dateFrom, { zone: tz })
+          .startOf('day')
+          .toUTC()
+          .toJSDate();
+      }
+
+      if (query.dateTo) {
+        toUtc = DateTime.fromJSDate(query.dateTo, { zone: tz }).endOf('day').toUTC().toJSDate();
+      }
+
+      if (fromUtc && toUtc) {
+        filter.startDate = { $gte: fromUtc, $lte: toUtc };
+      } else if (fromUtc) {
+        filter.startDate = { $gte: fromUtc };
+      } else if (toUtc) {
+        filter.startDate = { $lte: toUtc };
       }
     }
 

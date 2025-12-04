@@ -1,8 +1,21 @@
 import { z } from 'zod';
 
 const id24 = z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid id');
-const TIME_12H = /^(0?[1-9]|1[0-2]):[0-5]\d\s?(AM|PM)$/i;
+
+// Accept either 24h "HH:MM" (00:00 - 23:59) OR 12h "H:MM AM/PM" (allow optional leading zero)
+const RE_24H = /^(?:[01]\d|2[0-3]):[0-5]\d$/; // 00:00 - 23:59
+const RE_12H = /^(0?[1-9]|1[0-2]):[0-5]\d\s?(AM|PM)$/i; // 1:00 AM - 12:59 PM (with optional leading 0 and optional space)
+
+// helper: coerce to Date only when possible
 const toDate = (v: unknown) => (typeof v === 'string' && v ? new Date(v) : undefined);
+
+function isValidTimeString(v: unknown) {
+  if (v === undefined || v === null) return false;
+  if (typeof v !== 'string') return false;
+  const s = v.trim();
+  if (!s) return false;
+  return RE_24H.test(s) || RE_12H.test(s);
+}
 
 export const lessonCreateSchema = z.object({
   courseId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid courseId'),
@@ -13,9 +26,41 @@ export const lessonCreateSchema = z.object({
   title: z.string().min(1),
   description: z.string().optional(),
   schedule: z.object({
-    date: z.preprocess(v => new Date(v as any), z.date()),
-    time: z.string().regex(/^(0?[1-9]|1[0-2]):[0-5][0-9]\s?(AM|PM)$/i),
-    duration: z.number().int().min(1).max(60).default(60) // 1hr max as per your rule
+    // Accept date strings or Date objects; will be normalized by BE parseStartEnd
+    date: z.preprocess(
+      v => {
+        // keep YYYY-MM-DD strings as-is (preferred), accept full ISO strings too,
+        // and accept Date objects only if caller intentionally sent a Date instant.
+        if (v instanceof Date) return v; // allow Date objects
+        if (typeof v === 'string') {
+          const ds = v.trim();
+          // allow bare date "YYYY-MM-DD" and full ISO strings
+          if (/^\d{4}-\d{2}-\d{2}$/.test(ds)) return ds;
+          // if full ISO (with time/offset), allow -> leave as string to parse later
+          if (/^\d{4}-\d{2}-\d{2}T/.test(ds) || /^\d{4}-\d{2}-\d{2}$/.test(ds)) return ds;
+          // otherwise return original for zod to reject
+          return ds;
+        }
+        return v;
+      },
+      z.union([z.string(), z.date()])
+    ),
+    // accept 24h HH:MM OR 12h HH:MM AM/PM
+    time: z
+      .string()
+      .refine(v => isValidTimeString(v), {
+        message: 'Time must be in HH:MM (24h) or HH:MM AM/PM format'
+      }),
+    // duration in minutes; keep your existing rules (>=30 and <=60)
+    duration: z
+      .preprocess(v => {
+        if (v === '' || v === null || v === undefined) return undefined;
+        if (typeof v === 'string') return Number(v);
+        return v;
+      }, z.number().int())
+      .refine(n => Number.isInteger(n), { message: 'Duration must be an integer' })
+      .refine(n => n >= 30, { message: 'Duration must be at least 30 minute' })
+      .refine(n => n <= 60, { message: 'Duration must be ≤ 60 minutes' })
   }),
   status: z.enum(['draft', 'active', 'archived']).default('draft'),
   isTrialAvailable: z.boolean().default(false),
@@ -45,8 +90,8 @@ export const lessonScheduleSchema = z.object({
     .refine(v => v !== undefined && v !== null && String(v).trim() !== '', {
       message: 'Time is required'
     })
-    .refine(v => TIME_12H.test(String(v).trim()), {
-      message: 'Time must be in format HH:MM AM/PM'
+    .refine(v => isValidTimeString(v), {
+      message: 'Time must be in HH:MM (24h) or HH:MM AM/PM format'
     }),
 
   duration: z

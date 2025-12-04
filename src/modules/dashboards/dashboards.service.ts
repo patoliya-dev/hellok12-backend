@@ -1,4 +1,5 @@
 import { Types } from 'mongoose';
+import { DateTime } from 'luxon';
 import {
   getAverageRating,
   getMonthlyEarnings,
@@ -29,72 +30,67 @@ export const teacherDashboardService = {
 };
 
 export const StudentDashboardService = {
-  async getWeeklySchedule(query: any) {
-    const { studentId, startDate, endDate } = query;
+  async getWeeklySchedule(query: any & { timezone: string }) {
+    const { studentId, startDate, endDate, timezone = 'UTC' } = query;
 
-    // Fetch sessions from database with populated references
+    // startDate and endDate should already be UTC Date objects representing the day/week boundaries,
+    // computed via getWeekRangeFromISO(..., timezone).
     const sessions = await SessionModel.find({
       students: { $in: [new Types.ObjectId(studentId)] },
-      start: {
-        $gte: startDate,
-        $lte: endDate
-      }
+      start: { $gte: startDate, $lte: endDate }
     })
-      .populate({
-        path: 'lesson',
-        select: 'title'
-      })
-      .populate({
-        path: 'teacher',
-        select: 'name'
-      })
+      .populate({ path: 'lesson', select: 'title' })
+      .populate({ path: 'teacher', select: 'name' })
       .sort({ start: 1 })
       .lean();
 
-    // Group sessions by day
-    const dayMap = new Map<string, any[]>();
-
-    sessions.forEach((session: any) => {
-      const sessionDate = new Date(session.start);
-      const dateKey = sessionDate.toLocaleDateString('en-CA');
-
-      if (!dayMap.has(dateKey)) {
-        dayMap.set(dateKey, []);
-      }
-
-      const duration = Math.round(
-        (new Date(session.end).getTime() - new Date(session.start).getTime()) / (1000 * 60)
-      );
-
-      const sessionCard: any = {
-        sessionId: session._id.toString(),
-        lessonName: session.lesson?.title || 'Unknown Lesson',
-        teacherName: session.teacher?.name || 'Unknown Teacher',
-        duration,
-        startTime: session.start,
-        endTime: session.end,
-        status: session.status
-      };
-      dayMap.get(dateKey)!.push(sessionCard);
+    // Formatters using user's timezone
+    const timeFormatter = new Intl.DateTimeFormat('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+      timeZone: timezone
     });
 
-    // Generate all days in the week range
-    const days: any = [];
-    const currentDate = new Date(startDate);
+    const dayMap = new Map<string, any[]>();
 
-    while (currentDate <= endDate) {
-      // FIX: Use local date for consistency
-      const dateKey = currentDate.toLocaleDateString('en-CA');
-      const daySessions = dayMap.get(dateKey) || [];
+    for (const s of sessions) {
+      const startUtc = DateTime.fromJSDate(new Date(s.start), { zone: 'utc' });
+      // convert instant to user timezone for formatting only
+      const localStart = startUtc.setZone(timezone);
+      const dateKey = localStart.toISODate() ?? localStart.toFormat('yyyy-MM-dd'); // YYYY-MM-DD in user's tz
+      const displayTime = timeFormatter.format(localStart.toJSDate());
 
+      const sessionCard = {
+        sessionId: s._id.toString(),
+        lessonName: (s.lesson as any)?.title || 'Unknown Lesson',
+        teacherName: (s.teacher as any)?.name || 'Unknown Teacher',
+        duration: Math.round((new Date(s.end).getTime() - new Date(s.start).getTime()) / 60000),
+        startTime: s.start,
+        endTime: s.end,
+        displayTime,
+        status: s.status
+      };
+
+      if (!dayMap.has(dateKey)) dayMap.set(dateKey, []);
+      dayMap.get(dateKey)!.push(sessionCard);
+    }
+
+    // Build days array from startDate → endDate stepping by user's local day
+    const days = [];
+    // Build in user's timezone to ensure correct day names & keys
+    let cur = DateTime.fromJSDate(startDate, { zone: 'utc' }).setZone(timezone).startOf('day');
+    const endLocal = DateTime.fromJSDate(endDate, { zone: 'utc' }).setZone(timezone).endOf('day');
+
+    while (cur <= endLocal) {
+      const dateKey = cur.toISODate() ?? cur.toFormat('yyyy-MM-dd');
       days.push({
-        date: new Date(currentDate),
-        dayName: currentDate.toLocaleDateString('en-US', { weekday: 'long' }),
-        sessions: daySessions,
-        sessionCount: daySessions.length
+        date: cur.toUTC().toJSDate(), // anchor in UTC (useful on client)
+        dayName: cur.toFormat('cccc'), // e.g., Monday
+        sessions: dayMap.get(dateKey) || [],
+        sessionCount: (dayMap.get(dateKey) || []).length
       });
-
-      currentDate.setDate(currentDate.getDate() + 1);
+      cur = cur.plus({ days: 1 });
     }
 
     return {

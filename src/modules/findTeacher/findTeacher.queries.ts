@@ -510,6 +510,268 @@ function buildMultipleDatesMatch(dates: string[]) {
 
 export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
   const pipeline: any[] = [];
+  // Match teacherId
+  pipeline.push({
+    $match: {
+      _id: new Types.ObjectId(teacherId),
+      role: 'teacher'
+    }
+  });
+  // Lookup profile
+  pipeline.push({
+    $lookup: {
+      from: 'teacherprofiles',
+      localField: '_id',
+      foreignField: 'user',
+      as: 'profile'
+    }
+  });
+  // Unwind profile - keep doc even if profile missing (defensive)
+  pipeline.push({ $unwind: { path: '$profile', preserveNullAndEmptyArrays: true } });
+  // Lookup profileImage
+  pipeline.push({
+    $lookup: {
+      from: 'attachments',
+      localField: '_id',
+      foreignField: 'entityId',
+      pipeline: [{ $match: { status: 'READY', entityType: 'User' } }, { $project: { url: 1 } }],
+      as: 'profileImage'
+    }
+  });
+  // Add profileImage
+  pipeline.push({
+    $addFields: { profileImage: { $arrayElemAt: ['$profileImage.url', 0] } }
+  });
+  // Lookup highlights (profile.highlights may be missing or empty - lookup handles that)
+  pipeline.push({
+    $lookup: {
+      from: 'attachments',
+      localField: 'profile.highlights',
+      foreignField: '_id',
+      pipeline: [
+        { $match: { status: 'READY', entityType: 'TeacherProfile' } },
+        {
+          $project: {
+            url: 1,
+            key: 1,
+            name: 1,
+            size: 1,
+            createdAt: 1,
+            updatedAt: 1,
+            mime: 1
+          }
+        }
+      ],
+      as: 'highlights'
+    }
+  });
+  // Add highlights
+  pipeline.push({
+    $addFields: {
+      highlights: {
+        $cond: [{ $gt: [{ $size: '$highlights' }, 0] }, '$highlights', []]
+      }
+    }
+  });
+  // Lookup intro
+  pipeline.push({
+    $lookup: {
+      from: 'attachments',
+      localField: 'profile.intro',
+      foreignField: '_id',
+      pipeline: [
+        { $match: { status: 'READY', entityType: 'TeacherProfile' } },
+        {
+          $project: {
+            url: 1,
+            key: 1,
+            name: 1,
+            size: 1,
+            createdAt: 1,
+            updatedAt: 1,
+            mime: 1
+          }
+        }
+      ],
+      as: 'intro'
+    }
+  });
+  // Add intro
+  pipeline.push({
+    $addFields: {
+      intro: {
+        $cond: [{ $gt: [{ $size: '$intro' }, 0] }, { $arrayElemAt: ['$intro', 0] }, null]
+      }
+    }
+  });
+  // Lookup FeedbackRatings And count reviews and other operations
+  pipeline.push({
+    $lookup: {
+      from: 'feedbackratings',
+      localField: '_id',
+      foreignField: 'teacher',
+      pipeline: [
+        { $sort: { createdAt: -1 } }, // Sort by latest first
+        { $limit: 10 }, // Get only latest 10 reviews
+        {
+          $lookup: {
+            from: 'lessons',
+            localField: 'lesson',
+            foreignField: '_id',
+            as: 'lesson'
+          }
+        },
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'author',
+            foreignField: '_id',
+            pipeline: [
+              {
+                $lookup: {
+                  from: 'attachments',
+                  localField: '_id',
+                  foreignField: 'entityId',
+                  pipeline: [
+                    { $match: { status: 'READY', entityType: 'User' } },
+                    { $project: { url: 1 } }
+                  ],
+                  as: 'profileImage'
+                }
+              },
+              {
+                $addFields: { profileImage: { $arrayElemAt: ['$profileImage.url', 0] } }
+              },
+              {
+                $project: {
+                  _id: 1,
+                  name: 1,
+                  profileImage: 1
+                }
+              }
+            ],
+            as: 'author'
+          }
+        },
+        {
+          $addFields: {
+            lesson: {
+              $arrayElemAt: ['$lesson', 0]
+            },
+            author: {
+              $arrayElemAt: ['$author', 0]
+            }
+          }
+        },
+        {
+          $project: {
+            rating: 1,
+            comment: 1,
+            author: 1,
+            createdAt: 1,
+            lesson: 1
+          }
+        }
+      ],
+      as: 'feedbacks'
+    }
+  });
+  // Add averageRating and reviewsCount
+  pipeline.push({
+    $addFields: {
+      averageRating: {
+        $cond: [{ $gt: [{ $size: '$feedbacks' }, 0] }, { $avg: '$feedbacks.rating' }, null]
+      },
+      reviewsCount: { $size: '$feedbacks' }
+    }
+  });
+  // Lookup Courses -> studentStats (make $in robust with $ifNull)
+  pipeline.push({
+    $lookup: {
+      from: 'courses',
+      let: { teacherId: '$_id' },
+      pipeline: [
+        {
+          $match: {
+            $expr: { $in: ['$$teacherId', { $ifNull: ['$teachers', []] }] },
+            status: 'active'
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            totalStudents: { $sum: { $ifNull: ['$enrolledCount', 0] } }
+          }
+        }
+      ],
+      as: 'studentStats'
+    }
+  });
+  // Add studentsTaught
+  pipeline.push({
+    $addFields: {
+      studentsTaught: {
+        $ifNull: [{ $arrayElemAt: ['$studentStats.totalStudents', 0] }, 0]
+      }
+    }
+  });
+  // Lookup Courses -> course list (again make $in robust)
+  pipeline.push({
+    $lookup: {
+      from: 'courses',
+      let: { teacherId: '$_id' },
+      pipeline: [
+        {
+          $match: {
+            $expr: { $in: ['$$teacherId', { $ifNull: ['$teachers', []] }] },
+            status: 'active'
+          }
+        },
+        {
+          $project: {
+            title: 1,
+            description: 1,
+            enrolledCount: 1,
+            price: 1,
+            startDate: 1,
+            endDate: 1,
+            language: 1,
+            studentCapacity: 1,
+            lessonType: 1,
+            location: 1,
+            isTrialAvailable: 1,
+            mode: 1
+          }
+        }
+      ],
+      as: 'courses'
+    }
+  });
+  // Add available Courses Count
+  pipeline.push({
+    $addFields: {
+      availableCoursesCount: {
+        $size: {
+          $filter: {
+            input: '$courses',
+            as: 'course',
+            cond: {
+              $or: [
+                { $eq: ['$$course.lessonType', '1-on-1'] },
+                {
+                  $and: [
+                    { $eq: ['$$course.lessonType', 'group'] },
+                    { $lt: ['$$course.enrolledCount', '$$course.studentCapacity'] }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  });
+  // Project
   pipeline.push({
     $project: {
       _id: 1,

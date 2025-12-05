@@ -80,9 +80,8 @@ export const StudentDashboardService = {
     const days = [];
     // Build in user's timezone to ensure correct day names & keys
     let cur = DateTime.fromJSDate(startDate, { zone: 'utc' }).setZone(timezone).startOf('day');
-    const endLocal = DateTime.fromJSDate(endDate, { zone: 'utc' }).setZone(timezone).endOf('day');
 
-    while (cur <= endLocal) {
+    for (let i = 0; i < 7; i++) {
       const dateKey = cur.toISODate() ?? cur.toFormat('yyyy-MM-dd');
       days.push({
         date: cur.toUTC().toJSDate(), // anchor in UTC (useful on client)

@@ -14,6 +14,7 @@ import feedbackRatingRoutes from '../modules/feedbacks/feedbacks.routes';
 import dashboardRoutes from '../modules/dashboards/dashboards.routes';
 import earningsRoutes from '../modules/earnings/earnings.routes';
 import progressRoutes from '../modules/progress/progress.routes';
+import schoolRoutes from '../modules/school/school.routes';
 
 // Future imports:
 // import userRoutes from './user.routes';
@@ -40,6 +41,7 @@ router.use('/teachers/dashboard', dashboardRoutes);
 router.use('/students/dashboard', dashboardRoutes);
 router.use('/earnings', earningsRoutes);
 router.use('/progress', progressRoutes);
+router.use('/school', schoolRoutes);
 
 // Future routes:
 // router.use('/users', userRoutes);

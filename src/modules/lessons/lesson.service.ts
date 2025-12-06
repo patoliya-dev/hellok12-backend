@@ -69,7 +69,12 @@ interface PaginatedResponse {
   pendingCount: number;
 }
 
-type CreateArgs = { courseId: Types.ObjectId; lessons: LessonItemInput[]; timeZone?: string };
+type CreateArgs = {
+  courseId: Types.ObjectId;
+  lessons: LessonItemInput[];
+  timeZone?: string;
+  userRole?: string;
+};
 type UpdateArgs = {
   courseId: Types.ObjectId;
   updates: Array<{
@@ -418,7 +423,6 @@ export const LessonService = {
       (data as any).startAt = new Date(startAt.toISOString());
       (data as any).endAt = new Date(endAt.toISOString());
     }
-    console.log('data', data);
 
     const doc = await Lesson.create(data);
 
@@ -587,19 +591,11 @@ export const LessonService = {
     };
   },
 
-  async bulkCreateForCourse({ courseId, lessons, timeZone = 'UTC' }: CreateArgs) {
+  async bulkCreateForCourse({ courseId, lessons, timeZone = 'UTC', userRole }: CreateArgs) {
     const course = await Course.findById(courseId).lean();
     if (!course) {
       const e = new Error('Course not found');
       (e as any).code = '404_NOT_FOUND';
-      throw e;
-    }
-    const teacherId: Types.ObjectId = (course as any).teacherId || (course as any).ownerId;
-
-    if (!teacherId) {
-      const e = new Error('Course missing assigned teacher');
-      (e as any).code = '422_VALIDATION';
-      (e as any).fields = [{ path: 'course.teacherId', message: 'Assigned teacher is required' }];
       throw e;
     }
 
@@ -608,6 +604,9 @@ export const LessonService = {
 
     for (let i = 0; i < lessons.length; i++) {
       const l = lessons[i];
+      const teacherId: Types.ObjectId =
+        userRole === 'teacher' ? (course as any).ownerId : l.teacherId;
+
       if (!l.schedule?.time || !l.schedule?.date) {
         const e = new Error('Missing schedule time/date');
         (e as any).code = '422_VALIDATION';
@@ -658,7 +657,6 @@ export const LessonService = {
       const endUtc = new Date(endAt.toISOString());
 
       await checkOverlap({ teacherId, courseId, startAt: startUtc, endAt: endUtc });
-
       docs.push({
         courseId,
         teacherId,
@@ -681,13 +679,11 @@ export const LessonService = {
       // eslint-disable-next-line no-console
       console.debug(
         '[LessonService.bulkCreateForCourse] documents to insert (first 3):',
-        docs
-          .slice(0, 3)
-          .map(d => ({
-            startAt: d.startAt.toISOString(),
-            endAt: d.endAt.toISOString(),
-            schedule: d.schedule
-          }))
+        docs.slice(0, 3).map(d => ({
+          startAt: d.startAt.toISOString(),
+          endAt: d.endAt.toISOString(),
+          schedule: d.schedule
+        }))
       );
     }
 

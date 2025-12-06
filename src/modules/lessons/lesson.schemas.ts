@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { teacherDashboardService } from '../dashboards/dashboards.service';
 
 const id24 = z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid id');
 
@@ -46,11 +47,9 @@ export const lessonCreateSchema = z.object({
       z.union([z.string(), z.date()])
     ),
     // accept 24h HH:MM OR 12h HH:MM AM/PM
-    time: z
-      .string()
-      .refine(v => isValidTimeString(v), {
-        message: 'Time must be in HH:MM (24h) or HH:MM AM/PM format'
-      }),
+    time: z.string().refine(v => isValidTimeString(v), {
+      message: 'Time must be in HH:MM (24h) or HH:MM AM/PM format'
+    }),
     // duration in minutes; keep your existing rules (>=30 and <=60)
     duration: z
       .preprocess(v => {
@@ -152,7 +151,11 @@ export const lessonItemSchema = z.object({
   isTrialAvailable: z.boolean().optional().default(false),
   trialCapacity: z.coerce.number().int().min(0).optional(),
   order: z.coerce.number().int().min(0).optional(),
-  status: z.enum(['draft', 'active', 'archived']).optional().default('draft')
+  status: z.enum(['draft', 'active', 'archived']).optional().default('draft'),
+  teacherId: z
+    .string()
+    .regex(/^[0-9a-fA-F]{24}$/, 'Invalid teacherId')
+    .optional()
 });
 
 export type BulkUpdateLessonsInput = z.infer<typeof bulkUpdateLessonsSchema>;

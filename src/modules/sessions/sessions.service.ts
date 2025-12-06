@@ -83,7 +83,7 @@ const sessionService = {
       }
 
       const session = await SessionModel.create(sessionData);
-      console.log(session);
+
       const populatedSession = await SessionModel.findById(session._id)
         .populate('teacher', 'name email profileImage')
         // .populate('students', 'name email profileImage')

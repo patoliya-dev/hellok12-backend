@@ -131,11 +131,13 @@ export const getCourseDetails = (id: string) => {
       price: 1,
       isTrialAvailable: 1,
       lessons: 1,
+      studentCapacity: 1,
       introImageRef: 1,
       averageRating: 1,
       reviewsCount: 1,
       teachers: 1,
       lessonType: 1,
+      address: 1,
       mode: 1,
       nextLesson: 1,
       nextLessonDate: 1

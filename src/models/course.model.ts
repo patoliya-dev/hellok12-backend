@@ -1,5 +1,19 @@
 import { Schema, model, Types, Document } from 'mongoose';
 import { AGE_GROUPS, CourseMode, LessonType } from '../utils/constants';
+import { Address } from '../modules/courses/course.schemas';
+
+const AddressSchema = new Schema(
+  {
+    line1: { type: String, trim: true },
+    line2: { type: String, trim: true },
+    area: { type: String, trim: true },
+    city: { type: String, trim: true },
+    state: { type: String, trim: true },
+    postalCode: { type: String, trim: true },
+    country: { type: String, trim: true }
+  },
+  { _id: false }
+);
 
 export interface CourseDoc extends Document {
   title: string;
@@ -18,6 +32,9 @@ export interface CourseDoc extends Document {
   // ownership
   ownerType: 'school' | 'teacher';
   ownerId: Types.ObjectId;
+
+  // inside Course schema definition add:
+  address?: Address | null;
 
   // status flags
   status: 'draft' | 'active' | 'archived';
@@ -50,6 +67,8 @@ const CourseSchema = new Schema<CourseDoc>(
 
     ownerType: { type: String, enum: ['school', 'teacher'], required: true, index: true },
     ownerId: { type: Schema.Types.ObjectId, required: true, index: true },
+
+    address: { type: AddressSchema, default: null },
 
     status: { type: String, enum: ['draft', 'active', 'archived'], default: 'draft', index: true },
     isTrialAvailable: { type: Boolean, default: false, index: true },

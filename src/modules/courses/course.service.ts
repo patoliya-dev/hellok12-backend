@@ -5,6 +5,25 @@ import { Lesson } from '../../models/lesson.model';
 import { CourseCreateDTO, CourseUpdateDTO } from './course.schemas';
 import { getCourseDetails, getFeedbacks } from './course.queries';
 import { FeedbackRating } from '../../models/feedbackRatings.model';
+import { COURSE_MODE, LESSON_TYPES } from '../../utils/constants';
+
+function sanitizeCourseAddress(input: any, mergedMode: string, mergedLessonType: string) {
+  const needs = mergedMode === COURSE_MODE.IN_PERSON && mergedLessonType === LESSON_TYPES.GROUP;
+  if (!needs) return null;
+
+  if (!input) return null;
+  return {
+    line1: String(input.line1 || '').trim(),
+    line2: input.line2 ? String(input.line2).trim() : undefined,
+    area: input.area ? String(input.area).trim() : undefined,
+    city: String(input.city || '').trim(),
+    state: input.state ? String(input.state).trim() : undefined,
+    postalCode: input.postalCode ? String(input.postalCode).trim() : undefined,
+    country: String(input.country || '')
+      .trim()
+      .toUpperCase()
+  };
+}
 
 export const CourseService = {
   async create(
@@ -38,7 +57,7 @@ export const CourseService = {
       teachers: (data.teachers ?? []).map(t => new Types.ObjectId(t)),
       // cast if present
       introImageRef: data.introImageRef ? new Types.ObjectId(data.introImageRef) : null,
-
+      address: sanitizeCourseAddress(data.address, data.mode, data.lessonType),
       ownerType: owner.role,
       ownerId: new Types.ObjectId(owner.id),
 
@@ -58,6 +77,10 @@ export const CourseService = {
     timezone: string = 'UTC'
   ) {
     const filter: FilterQuery<CourseDoc> = { _id: id };
+    // load current to resolve final mode/lessonType after patch
+    const current = await Course.findById(id).lean();
+    if (!current) return null;
+
     if (owner) {
       filter.ownerType = owner.role;
       filter.ownerId = new Types.ObjectId(owner.id);
@@ -76,6 +99,18 @@ export const CourseService = {
       $set.endDate = data.endDate
         ? DateTime.fromJSDate(data.endDate, { zone: tz }).endOf('day').toUTC().toJSDate()
         : null;
+    }
+
+    const nextMode = data.mode ?? current.mode;
+    const nextLessonType = data.lessonType ?? current.lessonType;
+
+    // enforce: address only for in-person group
+    if ('address' in data || data.mode || data.lessonType) {
+      $set.address = sanitizeCourseAddress(
+        data.address ?? current.address,
+        nextMode,
+        nextLessonType
+      );
     }
 
     const updateQuery: UpdateQuery<CourseDoc> = { $set };

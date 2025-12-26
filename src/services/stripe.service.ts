@@ -7,7 +7,7 @@ import TransactionModel from '../models/transaction.model';
 import { SessionModel } from '../models/sessions.model';
 import InvoiceModel from '../models/invoice.model';
 import BookingModel from '../models/booking.model';
-import payoutModel from '../models/payout.model';
+import PayoutModel from '../models/payout.model';
 import { Course } from '../models/course.model';
 
 const { STRIPE_SECRET_KEY, PLATFORM_FEE_PERCENT = 20, STRIPE_API_VERSION = '2022-11-15' } = config;
@@ -574,13 +574,13 @@ export async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent) {
     const payoutReceiverId =
       (pi.metadata as any)?.payoutReceiverId || (pi.metadata as any)?.teacherId || null;
 
-    const existingPayout = await payoutModel.findOne({ transaction: tx._id });
+    const existingPayout = await PayoutModel.findOne({ transaction: tx._id });
 
     // choose a safe default for payout status: use PENDING so admins can reconcile or send
     const desiredStatus: 'PENDING' | 'SENT' | 'FAILED' | 'SETTLED' = 'PENDING';
 
     if (!existingPayout) {
-      await payoutModel.create({
+      await PayoutModel.create({
         transaction: tx._id,
         invoice: inv?._id || null,
         toUser: payoutReceiverId || null,
@@ -729,7 +729,7 @@ export async function createTransferToConnectedAccount({
     await tx.save();
   }
 
-  const payout = await payoutModel.create({
+  const payout = await PayoutModel.create({
     transaction: transactionId,
     toUser: tx?.payee || null,
     toAccountId,

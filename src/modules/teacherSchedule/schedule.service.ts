@@ -12,7 +12,9 @@ import {
   lessonExistsForWeekdaySlot,
   lessonExistsForDateSlot,
   getLessonMinutesForDate,
-  weeklyBaselineForDate
+  weeklyBaselineForDate,
+  getLessonMinuteIntervalsForDate,
+  normalizeMinutesArray
 } from './schedule.util';
 
 type Lean<T> = Omit<T, keyof Document> & { _id: Types.ObjectId };
@@ -45,7 +47,8 @@ export class ScheduleService {
       slotMinutes?: number;
       weekly?: Partial<Record<0 | 1 | 2 | 3 | 4 | 5 | 6, string[]>>;
       month?: string;
-    }
+    },
+    timeZone: string = 'UTC'
   ): Promise<ScheduleLean> {
     const existing = await TeacherSchedule.findOne({ teacherId });
 
@@ -78,59 +81,96 @@ export class ScheduleService {
     // If user provided a month -> operate on monthly[month]; else legacy weekly behavior
     const monthKey = body.month?.trim();
 
+    // Normalize existing.monthly (Mongoose Map) to a plain object: { "2025-12": { 0: [...], 1: [...], ... } }
+    const monthlyPlain: Record<string, Record<number, number[]>> = existing?.monthly
+      ? mapToPlain<Record<number, number[]>>(existing.monthly as any)
+      : {};
+
     // Validate that we are not removing weekly slots that are used by lessons
     if (body.weekly && existing) {
       // determine baseline array to compare against depending on target (monthly vs weekly)
       const conflicts: Array<{ weekday: number; slot: string }> = [];
 
-      // existing source for comparison:
+      // existing source for comparison (normalized to numeric minutes) from legacy weekly
       const existingWeeklySource: Record<number, number[]> = {};
       // load existing weekly baseline (legacy)
       for (let dow = 0; dow <= 6; dow++) {
-        existingWeeklySource[dow] = Array.isArray((existing.weekly as any)[dow])
+        const raw = Array.isArray((existing.weekly as any)[dow])
           ? (existing.weekly as any)[dow]
           : [];
+        existingWeeklySource[dow] = normalizeMinutesArray(raw);
       }
 
       // if month provided, attempt to read existing monthly entry
       let existingMonthlyForMonth: Record<number, number[]> | null = null;
-      if (
-        monthKey &&
-        existing.monthly &&
-        Object.prototype.hasOwnProperty.call(existing.monthly, monthKey)
-      ) {
-        existingMonthlyForMonth = (existing.monthly as any)?.[monthKey] || null;
+
+      // NEW (correct – checking the plain object returned by mapToPlain)
+      if (monthKey && Object.prototype.hasOwnProperty.call(monthlyPlain, monthKey)) {
+        existingMonthlyForMonth = monthlyPlain[monthKey] || null;
       }
+
+      // cache lesson intervals per date to avoid N x DB calls
+      const intervalsCache = new Map<string, Array<{ start: number; end: number }>>();
 
       for (let dow = 0; dow <= 6; dow++) {
         const existingArr: number[] = existingMonthlyForMonth
           ? existingMonthlyForMonth[dow] || []
           : existingWeeklySource[dow] || [];
         const incomingArr: number[] = (weeklyMins as any)[dow] || [];
+
+        // slots that are being removed for this weekday
         const removed = existingArr.filter(m => !incomingArr.includes(m));
         for (const m of removed) {
           // if targetting a month -> check lessons for that month dates which fall on this weekday;
           // otherwise legacy behavior checks weekday across all lessons.
           if (monthKey) {
-            // compute all dateISO strings for that month that have this weekday and check each date
+            // If targeting a specific month, check every date in that month with this weekday.
             const [yyyy, mmStr] = monthKey.split('-').map(Number);
             const monthIndex = mmStr - 1;
             // iterate days of month and for those matching dow check lessonExistsForDateSlot
             const daysInMonth = new Date(yyyy, monthIndex + 1, 0).getDate();
+
+            let conflictForThisMinute = false;
+
             for (let d = 1; d <= daysInMonth; d++) {
-              const dayISO = `${String(yyyy).padStart(4, '0')}-${String(mmStr).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+              const yyyyStr = String(yyyy).padStart(4, '0');
+              const mm = String(mmStr).padStart(2, '0');
+              const dd = String(d).padStart(2, '0');
+              const dayISO = `${yyyyStr}-${mm}-${dd}`;
+
               const weekday = weekdayFromISO(dayISO);
               if (weekday !== dow) continue;
-              const exists = await lessonExistsForDateSlot(teacherId, dayISO, m);
-              if (exists) {
+
+              // Get lesson intervals for this date in teacher's timezone
+              let intervals = intervalsCache.get(dayISO);
+              if (!intervals) {
+                intervals = await getLessonMinuteIntervalsForDate(teacherId, dayISO, timeZone);
+                intervalsCache.set(dayISO, intervals);
+              }
+
+              // slot interval in minutes-of-day
+              const slotStart = m;
+              const slotEnd = m + slot;
+
+              const overlaps = intervals.some(iv => iv.start < slotEnd && iv.end > slotStart);
+
+              if (overlaps) {
                 conflicts.push({ weekday: dow, slot: toHHMM(m) });
-                break; // stop checking more dates once conflict found for this m
+                conflictForThisMinute = true;
+                break; // stop checking more dates once conflict found for this slot m
               }
             }
+
+            if (conflictForThisMinute) {
+              // go to next removed slot
+              continue;
+            }
           } else {
-            // legacy: check by weekday across all lessons
-            const exists = await lessonExistsForWeekdaySlot(teacherId, dow, m);
-            if (exists) conflicts.push({ weekday: dow, slot: toHHMM(m) });
+            // legacy: check by weekday across all lessons (no month scoping)
+            const exists = await lessonExistsForWeekdaySlot(teacherId, dow, m, timeZone);
+            if (exists) {
+              conflicts.push({ weekday: dow, slot: toHHMM(m) });
+            }
           }
         }
       }
@@ -175,7 +215,8 @@ export class ScheduleService {
   /** Return available slots for a specific date (override > weekly) as HH:MM[] */
   static async getSlotsForDate(
     teacherId: Types.ObjectId,
-    dateISO: string
+    dateISO: string,
+    timeZone: string = 'UTC'
   ): Promise<{ slots: { disabled: boolean; minutes: number; label: string }[] }> {
     // Auto-create on first visit
     const sched = await this.getOrCreate(teacherId);
@@ -190,9 +231,16 @@ export class ScheduleService {
       const overrideMins = overridesObj[dateISO] || [];
       // return slot items (disabled flags computed by checking lessons)
       const slotItems = buildSlotItemsFromMinutes(overrideMins, slot);
-      // mark disabled where lessons already exist at that minute
-      const usedMinutes = await getLessonMinutesForDate(teacherId, dateISO);
-      return { slots: slotItems.map(s => ({ ...s, disabled: usedMinutes.has(s.minutes) })) };
+      // compute used intervals (local minutes) for the date in teacher timezone and mark overlap
+      const usedIntervals = await getLessonMinuteIntervalsForDate(teacherId, dateISO, timeZone);
+      return {
+        slots: slotItems.map(s => {
+          const slotStart = s.minutes;
+          const slotEnd = s.minutes + slot;
+          const disabled = usedIntervals.some(iv => iv.start < slotEnd && iv.end > slotStart);
+          return { ...s, disabled };
+        })
+      };
     }
 
     // Monthly-only baseline:
@@ -201,16 +249,22 @@ export class ScheduleService {
     const monthKey = dateISO.slice(0, 7);
     const monthlyMap = (sched as any).monthly || {};
     const monthEntry = monthlyMap && monthlyMap[monthKey];
+    const dow = weekdayFromISO(dateISO, timeZone);
     const weeklyMins: number[] =
-      monthEntry && Array.isArray(monthEntry[weekdayFromISO(dateISO)])
-        ? (monthEntry[weekdayFromISO(dateISO)] as number[])
-        : [];
+      monthEntry && Array.isArray(monthEntry[dow]) ? (monthEntry[dow] as number[]) : [];
     const slotItems = buildSlotItemsFromMinutes(weeklyMins, slot);
 
-    // Determine lesson-used minutes for that date and mark disabled accordingly
-    const usedMinutes = await getLessonMinutesForDate(teacherId, dateISO);
+    // Determine lesson-used intervals for that date and mark disabled accordingly (overlap)
+    const usedIntervals = await getLessonMinuteIntervalsForDate(teacherId, dateISO, timeZone);
 
-    return { slots: slotItems.map(s => ({ ...s, disabled: usedMinutes.has(s.minutes) })) };
+    return {
+      slots: slotItems.map(s => {
+        const slotStart = s.minutes;
+        const slotEnd = s.minutes + slot;
+        const disabled = usedIntervals.some(iv => iv.start < slotEnd && iv.end > slotStart);
+        return { ...s, disabled };
+      })
+    };
   }
 
   /**
@@ -219,7 +273,8 @@ export class ScheduleService {
    */
   static async getSlotsForMonth(
     teacherId: Types.ObjectId,
-    monthKey: string
+    monthKey: string,
+    timeZone: string = 'UTC'
   ): Promise<{
     month: string;
     weekly: Partial<Record<number, string[]>>;
@@ -267,7 +322,7 @@ export class ScheduleService {
         effectiveMins = overrideMins || [];
       } else {
         // Monthly-only baseline for that weekday, or empty if month not defined.
-        const dow = weekdayFromISO(iso);
+        const dow = weekdayFromISO(iso, timeZone);
         const baseline =
           (sched.monthly &&
             (sched.monthly as any)[monthKey] &&
@@ -278,7 +333,7 @@ export class ScheduleService {
 
       // build slot items and mark disabled if lessons exist
       const slotItems = buildSlotItemsFromMinutes(effectiveMins, slot);
-      const usedMinutes = await getLessonMinutesForDate(teacherId, iso);
+      const usedMinutes = await getLessonMinutesForDate(teacherId, iso, timeZone);
       const finalItems = slotItems.map(s => ({ ...s, disabled: usedMinutes.has(s.minutes) }));
 
       slotsByDate[iso] = finalItems;
@@ -300,7 +355,8 @@ export class ScheduleService {
   /** Add/remove/toggle slots for one date override (strings HH:MM) */
   static async patchDateSlots(
     teacherId: Types.ObjectId,
-    body: { date: string; add?: string[]; remove?: string[]; toggle?: string[] }
+    body: { date: string; add?: string[]; remove?: string[]; toggle?: string[] },
+    timeZone: string = 'UTC'
   ): Promise<{ date: string; slots: string[] }> {
     // --------------------------
     // 1) Load schedule and validate
@@ -364,7 +420,7 @@ export class ScheduleService {
 
     const conflicts: Array<{ slot: string }> = [];
     for (const m of removed) {
-      const exists = await lessonExistsForDateSlot(teacherId, body.date, m);
+      const exists = await lessonExistsForDateSlot(teacherId, body.date, m, timeZone);
       if (exists) conflicts.push({ slot: toHHMM(m) });
     }
     if (conflicts.length) {
@@ -427,13 +483,14 @@ export class ScheduleService {
   /** Validate a lesson block against the schedule for a given date */
   static async validateBlock(
     teacherId: Types.ObjectId,
-    body: { date: string; start: string; end: string }
+    body: { date: string; start: string; end: string },
+    timeZone: string = 'UTC'
   ): Promise<{ ok: boolean; reasons?: string[] }> {
     const sched = await this.get(teacherId);
     if (!sched) return { ok: false, reasons: ['NO_SCHEDULE'] };
 
     const slot = sched.slotMinutes ?? 60;
-    const slotsRes = await this.getSlotsForDate(teacherId, body.date);
+    const slotsRes = await this.getSlotsForDate(teacherId, body.date, timeZone);
     if (!slotsRes?.slots?.length) return { ok: false, reasons: ['OUTSIDE_AVAILABILITY'] };
 
     // Alignment

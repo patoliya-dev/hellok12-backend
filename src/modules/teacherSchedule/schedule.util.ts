@@ -1,6 +1,8 @@
+import { DateTime } from 'luxon';
 import { Document, Types } from 'mongoose';
-import { Lesson } from '../../models/lesson.model';
 import { TeacherScheduleDoc } from '../../models/teacherSchedule.model';
+import { Lesson } from '../../models/lesson.model';
+import { getDayRangeFromISO } from '../lessons/lesson.util';
 
 // Time helpers & validation shared by service + validators
 export const TIME_24H = /^([01]\d|2[0-3]):([0-5]\d)$/; // HH:MM
@@ -27,10 +29,19 @@ export function ensureAligned(times: string[], slot: number): string | null {
   return null;
 }
 
-export function weekdayFromISO(date: string): number {
-  // Sun=0 .. Sat=6 (aligns with our schema keys)
-  const d = new Date(date + 'T00:00:00.000Z');
-  return d.getUTCDay();
+// timezone-aware weekday helper (0=Sun .. 6=Sat)
+export function weekdayFromISO(date: string, timeZone: string = 'UTC'): number {
+  try {
+    const dt = DateTime.fromISO(date, { zone: timeZone });
+    if (!dt.isValid) {
+      // fallback to UTC parsing
+      return new Date(date + 'T00:00:00.000Z').getUTCDay();
+    }
+    // Luxon's weekday: 1 = Monday ... 7 = Sunday. Convert to 0=Sun..6=Sat
+    return dt.weekday % 7;
+  } catch {
+    return new Date(date + 'T00:00:00.000Z').getUTCDay();
+  }
 }
 
 // Normalizes a Mongoose Map<string, number[]> or plain object into a plain object
@@ -54,6 +65,69 @@ export function buildSlotItemsFromMinutes(
   }));
 }
 
+/**
+ * Return array of { start: number, end: number } intervals (minutes-of-day in teacher's timezone)
+ * for all lessons that start on the given dateISO (teacher-local day).
+ *
+ * We:
+ *  - compute UTC start/end instants for the teacher-local day using getDayRangeFromISO
+ *  - query lessons by startAt between those UTC instants (authoritative)
+ *  - convert each lesson's startAt/endAt into teacher timezone and return local minute intervals
+ */
+export async function getLessonMinuteIntervalsForDate(
+  teacherId: Types.ObjectId,
+  dateISO: string,
+  timeZone: string = 'UTC'
+): Promise<Array<{ start: number; end: number }>> {
+  // compute UTC day range that corresponds to the *teacher's* local date
+  const { start: startUtc, end: endUtc } = getDayRangeFromISO(dateISO, timeZone);
+
+  // Query lessons by startAt (UTC instants falling within that teacher-day)
+  const lessons = await Lesson.find({
+    teacherId,
+    startAt: { $gte: startUtc, $lte: endUtc }
+  })
+    .select({ startAt: 1, endAt: 1 })
+    .lean();
+
+  const intervals: Array<{ start: number; end: number }> = [];
+
+  for (const l of lessons) {
+    if (!l?.startAt || !l?.endAt) continue;
+    try {
+      const s = DateTime.fromJSDate(new Date(l.startAt)).setZone(timeZone);
+      const e = DateTime.fromJSDate(new Date(l.endAt)).setZone(timeZone);
+      if (!s.isValid || !e.isValid) continue;
+      const startMin = s.hour * 60 + s.minute;
+      const endMin = e.hour * 60 + e.minute;
+      // if lesson goes past midnight in local zone, clamp into 0..1440 interval or split if needed.
+      // For slot matching within a single day, clamp to day's boundaries.
+      const clampedStart = Math.max(0, Math.min(24 * 60, startMin));
+      const clampedEnd = Math.max(0, Math.min(24 * 60, endMin));
+      if (clampedEnd > clampedStart) intervals.push({ start: clampedStart, end: clampedEnd });
+    } catch (err) {
+      continue;
+    }
+  }
+
+  return intervals;
+}
+
+/**
+ * Backward-compatible helper: if some code still expects a Set of minutes (start times),
+ * you can call getLessonMinuteIntervalsForDate and derive the set of starts:
+ */
+export async function getLessonMinutesForDate(
+  teacherId: Types.ObjectId,
+  dateISO: string,
+  timeZone: string = 'UTC'
+): Promise<Set<number>> {
+  const intervals = await getLessonMinuteIntervalsForDate(teacherId, dateISO, timeZone);
+  const set = new Set<number>();
+  for (const iv of intervals) set.add(iv.start);
+  return set;
+}
+
 // -------------------------
 // Helpers for lesson checks
 // -------------------------
@@ -67,36 +141,72 @@ export function buildSlotItemsFromMinutes(
 export async function lessonExistsForWeekdaySlot(
   teacherId: Types.ObjectId,
   weekday: number,
-  minute: number
+  minute: number,
+  timeZone: string = 'UTC'
 ): Promise<boolean> {
-  // We fetch lessons for teacher and filter in JS — acceptable for moderate counts; optimize if needed.
-  const lessons = await Lesson.find({ teacherId }).select({ schedule: 1 }).lean();
+  // Fetch lessons for the teacher and base weekday on lesson.startAt in teacher timezone
+  const lessons = await Lesson.find({ teacherId }).select({ schedule: 1, startAt: 1 }).lean();
   for (const l of lessons) {
-    if (!l?.schedule?.date) continue;
-    const d = new Date(l.schedule?.date);
-    // use UTC day/time (consistent with schedule util which uses UTC)
-    if (d.getUTCDay() !== weekday) continue;
-    // const hhmm = d.getUTCHours() * 60 + d.getUTCMinutes();
-    // Convert '10:00 AM' to minutes (10*60 = 600)
-    const timeStr = l.schedule.time.trim();
-    const [time, period] = timeStr.split(' ');
-    let [hours, mins] = time.split(':').map(Number);
-    if (Number.isNaN(hours)) hours = 0;
-    if (Number.isNaN(mins)) mins = 0;
-    if (period?.toUpperCase() === 'PM' && hours !== 12) hours += 12;
-    if (period?.toUpperCase() === 'AM' && hours === 12) hours = 0;
-    const hhmm = hours * 60 + mins;
+    if (!l?.startAt) continue;
+    try {
+      const dt = DateTime.fromJSDate(new Date(l.startAt)).setZone(timeZone);
+      if (!dt.isValid) continue;
+      const lessonWeekday = dt.weekday % 7; // convert 1..7 -> 0..6 with Sunday=0
+      if (lessonWeekday !== weekday) continue;
 
-    console.log('Checking lessonExistsForWeekdaySlot slot:', {
-      date: l.schedule.date,
-      time: l.schedule.time,
-      hhmm,
-      minute
-    });
+      const hhmm = parseTimeToMinutes(l?.schedule?.time, l.startAt);
 
-    if (hhmm === minute) return true;
+      // console.debug(`Checking lessonExistsForWeekdaySlot: startAt=${l.startAt}, time=${l?.schedule?.time}, hhmm=${hhmm}, minute=${minute}`);
+      if (Number.isFinite(hhmm) && hhmm === minute) return true;
+    } catch {
+      continue;
+    }
   }
   return false;
+}
+
+/**
+ * Normalize an array of mixed minute/string values to numeric minutes.
+ * Accepts numbers (kept), "HH:MM" strings, "h:mm AM/PM" strings, or mixed.
+ * Returns a sorted, unique array of numeric minutes.
+ */
+export function normalizeMinutesArray(values: Array<number | string | undefined | null>): number[] {
+  const out: number[] = [];
+  for (const v of values || []) {
+    if (v === undefined || v === null) continue;
+    if (typeof v === 'number') {
+      if (Number.isFinite(v)) out.push(v);
+      continue;
+    }
+    if (typeof v === 'string') {
+      const s = v.trim();
+      if (!s) continue;
+      // Try parse as 24h "HH:MM"
+      try {
+        const n = toMinutes(s);
+        if (Number.isFinite(n)) {
+          out.push(n);
+          continue;
+        }
+      } catch {
+        // fallthrough to other parse
+      }
+      // try 12h parse "h:mm AM/PM"
+      const m = s.toUpperCase().match(/^(\d{1,2})(?::([0-5]\d))?\s*(AM|PM)$/);
+      if (m) {
+        let h = Number(m[1]);
+        const mm = m[2] ? Number(m[2]) : 0;
+        const suffix = m[3];
+        if (h === 12) h = 0;
+        if (suffix === 'PM') h += 12;
+        out.push(h * 60 + mm);
+        continue;
+      }
+      // If still not parsed, skip
+    }
+  }
+  // unique + sort
+  return Array.from(new Set(out)).sort((a, b) => a - b);
 }
 
 /**
@@ -105,91 +215,26 @@ export async function lessonExistsForWeekdaySlot(
 export async function lessonExistsForDateSlot(
   teacherId: Types.ObjectId,
   dateISO: string,
-  minute: number
+  minute: number,
+  timeZone: string = 'UTC'
 ): Promise<boolean> {
-  const dateStart = new Date(dateISO + 'T00:00:00.000Z');
-  const dateEnd = new Date(dateISO + 'T23:59:59.999Z');
+  // compute UTC start/end for the teacher-local date
+  const { start: dateStart, end: dateEnd } = getDayRangeFromISO(dateISO, timeZone);
 
   const lessons = await Lesson.find({
     teacherId,
-    'schedule.date': { $gte: dateStart, $lte: dateEnd }
+    startAt: { $gte: dateStart, $lte: dateEnd }
   })
-    .select({ schedule: 1 })
+    .select({ schedule: 1, startAt: 1 })
     .lean();
 
   for (const l of lessons) {
-    if (!l?.schedule?.date || !l.schedule?.time) continue;
-    // Convert '10:00 AM' to minutes (10*60 = 600)
-    const timeStr = l.schedule?.time?.trim();
-    const [time, period] = timeStr.split(' ');
-    let [hours, mins] = time.split(':').map(Number);
-    if (Number.isNaN(hours)) hours = 0;
-    if (Number.isNaN(mins)) mins = 0;
-    if (period?.toUpperCase() === 'PM' && hours !== 12) hours += 12;
-    if (period?.toUpperCase() === 'AM' && hours === 12) hours = 0;
-    const hhmm = hours * 60 + mins;
-
-    console.log('Checking lessonExistsForDateSlot slot:', {
-      date: l.schedule.date,
-      time: l.schedule.time,
-      hhmm,
-      minute
-    });
-    if (hhmm === minute) return true;
+    if (!l?.startAt || !l?.schedule?.time) continue;
+    const hhmm = parseTimeToMinutes(l.schedule.time, l.startAt);
+    // console.debug(`Checking lessonExistsForDateSlot: startAt=${l.startAt}, time=${l.schedule.time}, hhmm=${hhmm}, minute=${minute}`);
+    if (Number.isFinite(hhmm) && hhmm === minute) return true;
   }
   return false;
-}
-
-export async function getLessonMinutesForDate(
-  teacherId: Types.ObjectId,
-  dateISO: string
-): Promise<Set<number>> {
-  const dateStart = new Date(dateISO + 'T00:00:00.000Z');
-  const dateEnd = new Date(dateISO + 'T23:59:59.999Z');
-
-  const lessons = await Lesson.find({
-    teacherId,
-    'schedule.date': { $gte: dateStart, $lte: dateEnd }
-  })
-    .select({ 'schedule.time': 1, startAt: 1 })
-    .lean();
-
-  const out = new Set<number>();
-
-  for (const l of lessons) {
-    // Prefer schedule.time
-    const timeStr = l?.schedule?.time;
-    let mins: number | null = null;
-
-    if (typeof timeStr === 'string') {
-      // parse 12h format "10:00 AM", "2:30 PM", "10 AM"
-      const m = timeStr
-        .trim()
-        .toUpperCase()
-        .match(/^(\d{1,2})(?::([0-5]\d))?\s*(AM|PM)$/);
-      if (m) {
-        let h = Number(m[1]);
-        const mm = m[2] ? Number(m[2]) : 0;
-        const suffix = m[3];
-        if (h === 12) h = 0;
-        if (suffix === 'PM') h += 12;
-        mins = h * 60 + mm;
-      }
-    }
-
-    // fallback to startAt if schedule.time not parseable
-    if (mins === null || mins === undefined) {
-      if (l?.startAt) {
-        const d = new Date(l.startAt);
-        // use UTC to match dateISO boundaries above
-        mins = d.getUTCHours() * 60 + d.getUTCMinutes();
-      }
-    }
-
-    if (Number.isFinite(mins)) out.add(mins as number);
-  }
-
-  return out;
 }
 
 type Lean<T> = Omit<T, keyof Document> & { _id: Types.ObjectId };
@@ -215,4 +260,63 @@ export function weeklyBaselineForDate(
 
   // No monthly entry: return empty baseline so frontend shows empty slots.
   return [];
+}
+
+/**
+ * Parse a schedule.time string OR fallback to a startAt Date to return minute-of-day (UTC).
+ * Accepts:
+ *  - "HH:MM" (24h)
+ *  - "h:mm AM/PM"
+ *  - "HH" or "H" (hours)
+ *  - if timeStr absent or unparsable, will use startAt (Date) if provided.
+ *
+ * Returns number minutes (0..1439) or null if cannot parse.
+ */
+export function parseTimeToMinutes(
+  timeStr?: string | null,
+  startAt?: string | Date | null
+): number | null {
+  if (typeof timeStr === 'string' && timeStr.trim()) {
+    const s = timeStr.trim();
+    // Attempt 24h HH:MM or HH
+    const re24 = /^([01]?\d|2[0-3])(?::([0-5]\d))?$/;
+    const m24 = s.match(re24);
+    if (m24) {
+      const hh = Number(m24[1]);
+      const mm = m24[2] ? Number(m24[2]) : 0;
+      return hh * 60 + mm;
+    }
+
+    // attempt 12h
+    const re12 = /^(\d{1,2})(?::([0-5]\d))?\s*(AM|PM)$/i;
+    const m12 = s.match(re12);
+    if (m12) {
+      let h = Number(m12[1]);
+      const mm = m12[2] ? Number(m12[2]) : 0;
+      const ampm = m12[3].toUpperCase();
+      if (h === 12) h = 0;
+      if (ampm === 'PM') h += 12;
+      return h * 60 + mm;
+    }
+    // fallback: try parse "H" or "HH" as whole hour
+    const reHour = /^([0-1]?\d|2[0-3])$/;
+    if (reHour.test(s)) {
+      return Number(s) * 60;
+    }
+  }
+
+  // fallback to startAt (Date) if available (use UTC hours/minutes to match other logic)
+  if (startAt) {
+    const d =
+      typeof startAt === 'string'
+        ? new Date(startAt)
+        : startAt instanceof Date
+          ? startAt
+          : new Date(String(startAt));
+    if (!isNaN(d.getTime())) {
+      return d.getUTCHours() * 60 + d.getUTCMinutes();
+    }
+  }
+
+  return null;
 }

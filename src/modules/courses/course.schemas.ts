@@ -4,11 +4,11 @@ import { COURSE_MODE, LESSON_TYPES, AGE_GROUPS } from '../../utils/constants';
 export type Address = {
   line1: string;
   line2?: string;
-  area?: string;        // optional (society/locality)
+  area?: string; // optional (society/locality)
   city: string;
   state?: string;
   postalCode?: string;
-  country: string;      // e.g. "IN"
+  country: string; // e.g. "IN"
 };
 
 const addressSchema = z.object({
@@ -42,8 +42,10 @@ export const courseCreateSchema = z
   .refine(
     data => !data.endDate || (data.startDate && data.endDate && data.endDate >= data.startDate),
     { message: 'endDate must be greater than or equal to startDate', path: ['endDate'] }
-  ).superRefine((data, ctx) => {
-    const needsCourseAddress = data.mode === COURSE_MODE.IN_PERSON && data.lessonType === LESSON_TYPES.GROUP;
+  )
+  .superRefine((data, ctx) => {
+    const needsCourseAddress =
+      data.mode === COURSE_MODE.IN_PERSON && data.lessonType === LESSON_TYPES.GROUP;
 
     if (needsCourseAddress) {
       if (!data.address || !data.address.line1) {

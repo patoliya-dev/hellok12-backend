@@ -17,7 +17,7 @@ import { transformSessionToLesson } from './lesson.helper';
 import sessionService from '../sessions/sessions.service';
 import Logger from '../../utils/winstonLogger.utils';
 import { FeedbackRating } from '../../models/feedbackRatings.model';
-import bookingModel from '../../models/booking.model';
+import BookingModel from '../../models/booking.model';
 import { CourseOption, LessonItem, LessonListQuery, LessonViewType } from '../../types/LessonTypes';
 
 interface GetLessonsQuery {
@@ -940,11 +940,10 @@ export const LessonService = {
 
     const refreshed = await Lesson.find({ courseId }).sort({ order: 1 }).lean();
 
-    const enrolledStudents = await bookingModel
-      .find({
-        course: courseId,
-        paymentStatus: 'PAID'
-      })
+    const enrolledStudents = await BookingModel.find({
+      course: courseId,
+      paymentStatus: 'PAID'
+    })
       .select('student')
       .lean();
 
@@ -1220,30 +1219,23 @@ export const LessonService = {
     const now = new Date();
     const skip = (page - 1) * limit;
 
-    // Build query filters
     const filters: any = {
-      students: studentId,
+      students: new Types.ObjectId(studentId),
       status: { $ne: SessionStatus.CANCELLED }
     };
 
-    if (courseId) {
-      filters.course = courseId;
-    }
+    if (courseId) filters.course = new Types.ObjectId(courseId);
 
-    if (view === LessonViewType.UPCOMING) {
-      filters.start = { $gte: now };
-    } else {
-      filters.end = { $lt: now };
-    }
+    if (view === LessonViewType.UPCOMING) filters.start = { $gte: now };
+    else filters.end = { $lt: now };
 
-    // Get total count
     const totalItems = await SessionModel.countDocuments(filters);
 
     // Fetch sessions with populated data
     const sessions = await SessionModel.find(filters)
       .populate({
         path: 'course',
-        select: 'title lessonType mode',
+        select: 'title lessonType mode address',
         populate: { path: 'introImageRef', select: 'url' }
       })
       .populate('lesson', 'title isTrialAvailable schedule description')
@@ -1256,13 +1248,42 @@ export const LessonService = {
       .skip(skip)
       .limit(limit)
       .lean();
-    const teacherIds = sessions.map((lesson: any) => lesson?.teacher?._id).filter(Boolean);
-    const ratings = await FeedbackRating.aggregate([
-      {
-        $match: {
-          teacher: { $in: teacherIds }
+
+    // Collect in-person 1-on-1 courseIds only (because only those need booking.address)
+    const oneOnOneInPersonCourseIds = Array.from(
+      new Set(
+        sessions
+          .filter((s: any) => s?.course?.mode === 'in-person' && s?.course?.lessonType === '1-on-1')
+          .map((s: any) => String(s.course?._id))
+          .filter(Boolean)
+      )
+    );
+
+    // Map: courseId -> booking.address
+    const bookingAddressByCourseId = new Map<string, any>();
+
+    if (oneOnOneInPersonCourseIds.length > 0) {
+      const bookings = await BookingModel.find({
+        student: new Types.ObjectId(studentId),
+        course: { $in: oneOnOneInPersonCourseIds.map(id => new Types.ObjectId(id)) },
+        paymentStatus: { $in: ['PAID', 'NOT_REQUIRED'] }
+      })
+        .select('course address updatedAt createdAt')
+        .sort({ updatedAt: -1, createdAt: -1 })
+        .lean();
+
+      for (const b of bookings) {
+        const cId = String(b.course);
+        if (!bookingAddressByCourseId.has(cId) && b.address) {
+          bookingAddressByCourseId.set(cId, b.address);
         }
-      },
+      }
+    }
+
+    // Ratings (keep your existing logic as-is)
+    const teacherIds = sessions.map((s: any) => s?.teacher?._id).filter(Boolean);
+    const ratings = await FeedbackRating.aggregate([
+      { $match: { teacher: { $in: teacherIds } } },
       {
         $group: {
           _id: '$teacher',
@@ -1274,21 +1295,38 @@ export const LessonService = {
 
     const ratingsMap = new Map(
       ratings.map(r => [
-        r._id.toString(),
+        String(r._id),
         { averageRating: r.averageRating, totalRatings: r.totalRatings }
       ])
     );
 
     const lessons: LessonItem[] = sessions.map((session: any) => {
-      const duration = Math.round((session.end - session.start) / (1000 * 60)); // minutes
-      const teacherRating = ratingsMap.get(session.teacher._id.toString());
+      const duration = Math.round((session.end - session.start) / (1000 * 60));
+      const teacherRating = ratingsMap.get(String(session.teacher._id));
 
-      const lessonItem: LessonItem = {
-        sessionId: session._id.toString(),
+      const lessonType = session.course?.lessonType || '1-on-1';
+      const courseMode = session.course?.mode || 'online';
+
+      // resolve address (return "as-is")
+      let address: any = null;
+
+      if (courseMode === 'in-person') {
+        if (lessonType === 'group') {
+          address = session.course?.address || null;
+        } else {
+          address =
+            bookingAddressByCourseId.get(String(session.course?._id)) ||
+            session.course?.address ||
+            null;
+        }
+      }
+
+      const lessonItem: any = {
+        sessionId: String(session._id),
         lessonTitle: session.lesson?.title || 'Untitled Lesson',
         courseTitle: session.course?.title || 'Untitled Course',
         teacher: {
-          _id: session.teacher._id.toString(),
+          _id: String(session.teacher._id),
           name: session.teacher.name,
           profileImage: session.teacher.profileImage,
           rating: teacherRating || { averageRating: 0, totalRatings: 0 }
@@ -1297,13 +1335,14 @@ export const LessonService = {
         endTime: session.end,
         duration,
         status: session.status,
-        lessonType: session.course?.lessonType || '1-on-1',
-        courseMode: session.course?.mode || 'online',
+        lessonType,
+        courseMode,
         isTrialLesson: session.lesson?.isTrialAvailable || false,
-        description: session.lesson?.description
+        description: session.lesson?.description,
+        address
       };
 
-      if (session.course?.mode === 'online' && session.joinUrl) {
+      if (courseMode === 'online' && session.joinUrl) {
         lessonItem.meetingUrl = session.joinUrl;
       }
 

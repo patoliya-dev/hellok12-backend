@@ -140,8 +140,8 @@ export type BulkCreateLessonsInput = z.infer<typeof bulkCreateLessonsSchema>;
 export const bulkUpdateLessonsSchema = z.object({
   params: z.object({ courseId: id24 }),
   body: z.object({
-    updates: z.array(lessonUpdateItemSchema).min(1).max(100).optional(),
-    deletes: z.array(id24).optional() // lesson ids to delete (optional)
+    updates: z.array(lessonUpdateItemSchema).default([]),
+    deletes: z.array(id24).default([])
   })
 });
 

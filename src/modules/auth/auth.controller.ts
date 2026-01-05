@@ -1,7 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { authService } from './auth.service';
-import { createErrorResponse } from '../../utils/apiResponse';
-import { body } from 'express-validator';
+import { createErrorResponse, createSuccessResponse } from '../../utils/apiResponse';
 
 export const authController = {
   signup: async (req: Request, res: Response, next: NextFunction) => {
@@ -213,21 +212,27 @@ export const authController = {
     try {
       const { userId } = req.params;
       if (!userId) {
-        return res.status(401).json(createErrorResponse('Unauthorized', 'Unauthorized', 401));
+        return res.status(400).json(createErrorResponse('Missing userId', 'Bad Request', 400));
       }
 
-      const user = await authService.updateCurrentUser(userId, req.body);
+      // Recommended: allow only self update (unless you explicitly want admin override)
+      if (!req.user?.id || String(req.user.id) !== String(userId)) {
+        return res.status(403).json(createErrorResponse('Forbidden', 'Forbidden', 403));
+      }
 
-      res.json({
-        success: true,
-        data: user
+      const user = await authService.updateCurrentUser({
+        userId,
+        authUserId: String(req.user.id),
+        authRole: String(req.user.role),
+        body: req.body
       });
+
+      return res.status(200).json(createSuccessResponse(user, 'Profile updated', 200));
     } catch (err: any) {
-      res.status(500).json({
-        success: false,
-        message: 'Server error',
-        error: err.message
-      });
+      const status = err?.statusCode || 500;
+      return res
+        .status(status)
+        .json(createErrorResponse(err?.message || 'Server error', 'Error', status));
     }
   },
 

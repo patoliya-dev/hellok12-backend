@@ -14,13 +14,8 @@ import feedbackRatingRoutes from '../modules/feedbacks/feedbacks.routes';
 import dashboardRoutes from '../modules/dashboards/dashboards.routes';
 import earningsRoutes from '../modules/earnings/earnings.routes';
 import progressRoutes from '../modules/progress/progress.routes';
-import schoolRoutes from '../modules/school/school.routes';
-
-// Future imports:
-// import userRoutes from './user.routes';
-// import schoolRoutes from './school.routes';
-// import teacherRoutes from './teacher.routes';
-// import parentRoutes from './parent.routes';
+import manageTeachersStudentsRoutes from '../modules/school/manageTeachersStudents.routes';
+import invitationRoutes from '../modules/invitations/invitation.routes';
 
 const router = Router();
 
@@ -41,12 +36,7 @@ router.use('/teachers/dashboard', dashboardRoutes);
 router.use('/students/dashboard', dashboardRoutes);
 router.use('/earnings', earningsRoutes);
 router.use('/progress', progressRoutes);
-router.use('/school', schoolRoutes);
-
-// Future routes:
-// router.use('/users', userRoutes);
-// router.use('/schools', schoolRoutes);
-// router.use('/teachers', teacherRoutes);
-// router.use('/parents', parentRoutes);
+router.use('/school', manageTeachersStudentsRoutes);
+router.use('/invitations', invitationRoutes);
 
 export default router;

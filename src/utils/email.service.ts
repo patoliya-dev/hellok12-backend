@@ -602,7 +602,7 @@ export const emailService = {
         token,
         name,
         userType: 'student',
-        dashboardUrl: `${config.clientURL}/student-parent/dashboard`
+        dashboardUrl: `${config.clientURL}/student/dashboard`
       });
       await sendEmail(to, 'Welcome to HelloK12 - Verify Your Student Account', html);
       Logger.info(`Student verification email sent to ${to}`);
@@ -625,7 +625,7 @@ export const emailService = {
         childrenCount,
         userType: 'parent',
         childrenText: childrenCount === 1 ? 'child' : 'children',
-        dashboardUrl: `${config.clientURL}/student-parent/dashboard`
+        dashboardUrl: `${config.clientURL}/parent/dashboard`
       });
       await sendEmail(to, `Welcome to HelloK12 - Verify Your Parent Account`, html);
       Logger.info(`Parent verification email sent to ${to} for ${childrenCount} children`);
@@ -674,16 +674,12 @@ export const emailService = {
   sendTeacherInvitation: async (
     to: string,
     schoolName: string,
-    schoolId: string,
-    message?: string
-  ): Promise<void> => {
+    inviteLink: string,
+    message: string = ''
+  ) => {
     try {
-      // Construct the invitation link (replace with your actual invitation endpoint)
-      const inviteLink = `${config.clientURL}/teacher/accept-invitation?schoolId=${schoolId}`;
-
       const html = compileTemplate('teacher-invitation', {
         schoolName,
-        schoolId,
         message,
         inviteLink,
         userType: 'teacher'
@@ -691,7 +687,7 @@ export const emailService = {
 
       await sendEmail(to, `${schoolName} invited you to join HelloK12!`, html);
 
-      Logger.info(`Teacher invitation sent to ${to} from ${schoolName} (School ID: ${schoolId})`);
+      Logger.info(`Teacher invitation sent to ${to} from ${schoolName})`);
     } catch (error) {
       Logger.error('Failed to send teacher invitation:', error);
       throw error;
@@ -701,15 +697,12 @@ export const emailService = {
   sendStudentInvitation: async (
     to: string,
     schoolName: string,
-    schoolId: string,
-    message?: string
-  ): Promise<void> => {
+    inviteLink: string,
+    message: string = ''
+  ) => {
     try {
-      const inviteLink = `${config.clientURL}/student/accept-invitation?schoolId=${schoolId}`;
-
       const html = compileTemplate('student-invitation', {
         schoolName,
-        schoolId,
         message,
         inviteLink,
         userType: 'student'
@@ -717,7 +710,7 @@ export const emailService = {
 
       await sendEmail(to, `${schoolName} invited you to join HelloK12!`, html);
 
-      Logger.info(`Student invitation sent to ${to} from ${schoolName} (School ID: ${schoolId})`);
+      Logger.info(`Student invitation sent to ${to} from ${schoolName}`);
     } catch (error) {
       Logger.error('Failed to send student invitation:', error);
       throw error;
@@ -781,8 +774,8 @@ export const emailService = {
   sendWelcomeEmail: async (email: string, name: string, userType: string): Promise<void> => {
     try {
       const dashboardUrls = {
-        student: '/student-parent/dashboard',
-        parent: '/student-parent/dashboard',
+        student: '/student/dashboard',
+        parent: '/parent/dashboard',
         teacher: '/teacher/dashboard',
         school: '/school/dashboard'
       };

@@ -1,3 +1,4 @@
+import { DateTime } from 'luxon';
 import { Types, Document } from 'mongoose';
 import { TeacherSchedule, TeacherScheduleDoc } from '../../models/teacherSchedule.model';
 import {
@@ -46,7 +47,7 @@ export class ScheduleService {
     body: {
       slotMinutes?: number;
       weekly?: Partial<Record<0 | 1 | 2 | 3 | 4 | 5 | 6, string[]>>;
-      month?: string;
+      month?: string; // YYYY-MM
     },
     timeZone: string = 'UTC'
   ): Promise<ScheduleLean> {
@@ -54,7 +55,9 @@ export class ScheduleService {
 
     const slot = body.slotMinutes ?? existing?.slotMinutes ?? 60;
 
-    // Validate alignment if weekly provided
+    // --------------------------
+    // 1) Validate weekly alignment (if provided)
+    // --------------------------
     if (body.weekly) {
       for (const [k, arr] of Object.entries(body.weekly)) {
         const idx = Number(k) as 0 | 1 | 2 | 3 | 4 | 5 | 6;
@@ -69,7 +72,7 @@ export class ScheduleService {
       }
     }
 
-    // Convert weekly strings -> minutes
+    // Convert weekly strings -> minutes (normalized)
     const weeklyMins: Partial<Record<0 | 1 | 2 | 3 | 4 | 5 | 6, number[]>> = {};
     if (body.weekly) {
       for (const [k, arr] of Object.entries(body.weekly)) {
@@ -78,17 +81,176 @@ export class ScheduleService {
       }
     }
 
-    // If user provided a month -> operate on monthly[month]; else legacy weekly behavior
-    const monthKey = body.month?.trim();
+    const monthKey = body.month?.trim(); // "YYYY-MM"
 
-    // Normalize existing.monthly (Mongoose Map) to a plain object: { "2025-12": { 0: [...], 1: [...], ... } }
-    const monthlyPlain: Record<string, Record<number, number[]>> = existing?.monthly
-      ? mapToPlain<Record<number, number[]>>(existing.monthly as any)
-      : {};
+    // --------------------------
+    // 2) Month-aware behavior
+    // --------------------------
+    if (monthKey && body.weekly) {
+      // Ensure format safety (schema already validates, but keep defense in depth)
+      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(monthKey)) {
+        const e = new Error('month must be YYYY-MM');
+        (e as any).code = '422_VALIDATION';
+        (e as any).fields = [{ path: 'body.month', message: 'month must be YYYY-MM' }];
+        throw e;
+      }
 
-    // Validate that we are not removing weekly slots that are used by lessons
-    if (body.weekly && existing) {
-      // determine baseline array to compare against depending on target (monthly vs weekly)
+      // Existing monthly map (plain)
+      const monthlyPlain: Record<string, Record<number, number[]>> = existing?.monthly
+        ? mapToPlain<Record<number, number[]>>(existing.monthly as any)
+        : {};
+
+      // Old month entry (before update) = what we must preserve for past dates
+      const oldMonthEntry: Record<number, number[]> =
+        (monthlyPlain && monthlyPlain[monthKey]) || {};
+
+      // Existing overrides (plain)
+      const overridesPlain: Record<string, number[]> = mapToPlain<number[]>(
+        (existing?.overrides as any) || {}
+      );
+
+      // Teacher-local "today" ISO. Rule: do NOT modify <= today.
+      const todayISO = DateTime.now().setZone(timeZone).toISODate();
+      if (!todayISO) {
+        const e = new Error('Invalid timezone');
+        (e as any).code = '422_VALIDATION';
+        (e as any).fields = [{ path: 'headers.x-timezone', message: 'Invalid timezone' }];
+        throw e;
+      }
+
+      // Month day iteration in teacher timezone (DST safe for “calendar day”)
+      const [yyyyStr, mmStr] = monthKey.split('-');
+      const yyyy = Number(yyyyStr);
+      const mm = Number(mmStr);
+
+      const monthStart = DateTime.fromObject({ year: yyyy, month: mm, day: 1 }, { zone: timeZone });
+      if (!monthStart.isValid) {
+        const e = new Error('Invalid month/timezone combination');
+        (e as any).code = '422_VALIDATION';
+        (e as any).fields = [{ path: 'body.month', message: 'Invalid month/timezone' }];
+        throw e;
+      }
+
+      const daysInMonth = monthStart.daysInMonth ?? 0;
+
+      // --------------------------
+      // 3) Conflict validation for FUTURE dates only
+      //    If a slot is being removed by the monthly change, do not allow if any future lesson overlaps,
+      //    unless an explicit override for that date preserves that slot.
+      // --------------------------
+      const conflicts: Array<{ date: string; weekday: number; slot: string }> = [];
+      const intervalsCache = new Map<string, Array<{ start: number; end: number }>>();
+
+      for (let dow = 0; dow <= 6; dow++) {
+        const oldArr = normalizeMinutesArray(oldMonthEntry[dow] || []);
+        const newArr = normalizeMinutesArray(((weeklyMins as any)[dow] || []) as any);
+
+        const removed = oldArr.filter(m => !newArr.includes(m));
+        if (!removed.length) continue;
+
+        for (let d = 1; d <= daysInMonth; d++) {
+          const dateLocal = DateTime.fromObject(
+            { year: yyyy, month: mm, day: d },
+            { zone: timeZone }
+          ).startOf('day');
+
+          const dateISO = dateLocal.toISODate()!;
+          if (dateISO <= todayISO) continue; // only future
+
+          const dateDow = dateLocal.weekday % 7;
+          if (dateDow !== dow) continue;
+
+          // If date has an override, and it still contains the removed slot minute, then it is preserved.
+          const hasOverride = Object.prototype.hasOwnProperty.call(overridesPlain, dateISO);
+          const overrideMins = hasOverride
+            ? normalizeMinutesArray(overridesPlain[dateISO] || [])
+            : [];
+          const preserves = (m: number) => hasOverride && overrideMins.includes(m);
+
+          let intervals = intervalsCache.get(dateISO);
+          if (!intervals) {
+            intervals = await getLessonMinuteIntervalsForDate(teacherId, dateISO, timeZone);
+            intervalsCache.set(dateISO, intervals);
+          }
+
+          for (const m of removed) {
+            if (preserves(m)) continue;
+
+            const slotStart = m;
+            const slotEnd = m + slot;
+            const overlaps = intervals.some(iv => iv.start < slotEnd && iv.end > slotStart);
+
+            if (overlaps) {
+              conflicts.push({ date: dateISO, weekday: dow, slot: toHHMM(m) });
+            }
+          }
+        }
+      }
+
+      if (conflicts.length) {
+        const e = new Error('Cannot remove slots used by existing lessons (future dates)');
+        (e as any).code = '422_VALIDATION';
+        (e as any).fields = conflicts.map(c => ({
+          path: `body.monthly.${monthKey}.${c.weekday}`,
+          message: `Slot ${c.slot} is used by an existing lesson on ${c.date}`
+        }));
+        throw e;
+      }
+
+      // --------------------------
+      // 4) Freeze PAST (and TODAY) dates by writing overrides that preserve the OLD baseline
+      //    Only for dates that currently do NOT have overrides (manual edits must remain authoritative).
+      // --------------------------
+      for (let d = 1; d <= daysInMonth; d++) {
+        const dateLocal = DateTime.fromObject(
+          { year: yyyy, month: mm, day: d },
+          { zone: timeZone }
+        ).startOf('day');
+
+        const dateISO = dateLocal.toISODate()!;
+        if (dateISO > todayISO) continue; // only past/today to freeze
+
+        // Do not override an existing override (manual per-date configuration stays)
+        if (Object.prototype.hasOwnProperty.call(overridesPlain, dateISO)) continue;
+
+        const dow = dateLocal.weekday % 7;
+        const oldBaselineForThatDow = normalizeMinutesArray(oldMonthEntry[dow] || []);
+
+        // Persist even empty array: means "explicitly no availability that day"
+        overridesPlain[dateISO] = oldBaselineForThatDow;
+      }
+
+      // --------------------------
+      // 5) Persist:
+      //    - monthly[monthKey] = NEW weekday baseline
+      //    - overrides = frozen past dates + existing overrides untouched
+      // --------------------------
+      const monthlyNext: Record<string, any> = existing?.monthly
+        ? mapToPlain<any>(existing.monthly)
+        : {};
+      monthlyNext[monthKey] = weeklyMins as any;
+
+      const $set: Partial<TeacherScheduleDoc> = {
+        monthly: monthlyNext as any,
+        overrides: overridesPlain as any
+      };
+
+      if (body.slotMinutes) $set.slotMinutes = body.slotMinutes;
+
+      const updated = await TeacherSchedule.findOneAndUpdate(
+        { teacherId },
+        { $set },
+        { new: true, upsert: true }
+      ).lean<ScheduleLean>();
+
+      return updated!;
+    }
+
+    // --------------------------
+    // 3) Legacy weekly-only (no monthKey)
+    // --------------------------
+    // Existing lesson conflict check (legacy behavior)
+    if (body.weekly && existing && !monthKey) {
       const conflicts: Array<{ weekday: number; slot: string }> = [];
 
       // existing source for comparison (normalized to numeric minutes) from legacy weekly
@@ -101,77 +263,14 @@ export class ScheduleService {
         existingWeeklySource[dow] = normalizeMinutesArray(raw);
       }
 
-      // if month provided, attempt to read existing monthly entry
-      let existingMonthlyForMonth: Record<number, number[]> | null = null;
-
-      // NEW (correct – checking the plain object returned by mapToPlain)
-      if (monthKey && Object.prototype.hasOwnProperty.call(monthlyPlain, monthKey)) {
-        existingMonthlyForMonth = monthlyPlain[monthKey] || null;
-      }
-
-      // cache lesson intervals per date to avoid N x DB calls
-      const intervalsCache = new Map<string, Array<{ start: number; end: number }>>();
-
       for (let dow = 0; dow <= 6; dow++) {
-        const existingArr: number[] = existingMonthlyForMonth
-          ? existingMonthlyForMonth[dow] || []
-          : existingWeeklySource[dow] || [];
-        const incomingArr: number[] = (weeklyMins as any)[dow] || [];
+        const existingArr = existingWeeklySource[dow] || [];
+        const incomingArr = (weeklyMins as any)[dow] || [];
 
-        // slots that are being removed for this weekday
         const removed = existingArr.filter(m => !incomingArr.includes(m));
         for (const m of removed) {
-          // if targetting a month -> check lessons for that month dates which fall on this weekday;
-          // otherwise legacy behavior checks weekday across all lessons.
-          if (monthKey) {
-            // If targeting a specific month, check every date in that month with this weekday.
-            const [yyyy, mmStr] = monthKey.split('-').map(Number);
-            const monthIndex = mmStr - 1;
-            // iterate days of month and for those matching dow check lessonExistsForDateSlot
-            const daysInMonth = new Date(yyyy, monthIndex + 1, 0).getDate();
-
-            let conflictForThisMinute = false;
-
-            for (let d = 1; d <= daysInMonth; d++) {
-              const yyyyStr = String(yyyy).padStart(4, '0');
-              const mm = String(mmStr).padStart(2, '0');
-              const dd = String(d).padStart(2, '0');
-              const dayISO = `${yyyyStr}-${mm}-${dd}`;
-
-              const weekday = weekdayFromISO(dayISO);
-              if (weekday !== dow) continue;
-
-              // Get lesson intervals for this date in teacher's timezone
-              let intervals = intervalsCache.get(dayISO);
-              if (!intervals) {
-                intervals = await getLessonMinuteIntervalsForDate(teacherId, dayISO, timeZone);
-                intervalsCache.set(dayISO, intervals);
-              }
-
-              // slot interval in minutes-of-day
-              const slotStart = m;
-              const slotEnd = m + slot;
-
-              const overlaps = intervals.some(iv => iv.start < slotEnd && iv.end > slotStart);
-
-              if (overlaps) {
-                conflicts.push({ weekday: dow, slot: toHHMM(m) });
-                conflictForThisMinute = true;
-                break; // stop checking more dates once conflict found for this slot m
-              }
-            }
-
-            if (conflictForThisMinute) {
-              // go to next removed slot
-              continue;
-            }
-          } else {
-            // legacy: check by weekday across all lessons (no month scoping)
-            const exists = await lessonExistsForWeekdaySlot(teacherId, dow, m, timeZone);
-            if (exists) {
-              conflicts.push({ weekday: dow, slot: toHHMM(m) });
-            }
-          }
+          const exists = await lessonExistsForWeekdaySlot(teacherId, dow, m, timeZone);
+          if (exists) conflicts.push({ weekday: dow, slot: toHHMM(m) });
         }
       }
 
@@ -179,7 +278,7 @@ export class ScheduleService {
         const e = new Error('Cannot remove slots used by existing lessons');
         (e as any).code = '422_VALIDATION';
         (e as any).fields = conflicts.map(c => ({
-          path: monthKey ? `body.monthly.${monthKey}.${c.weekday}` : `body.weekly.${c.weekday}`,
+          path: `body.weekly.${c.weekday}`,
           message: `Slot ${c.slot} is used by existing lesson`
         }));
         throw e;
@@ -189,19 +288,7 @@ export class ScheduleService {
     // Build $set
     const $set: Partial<TeacherScheduleDoc> = {};
     if (body.slotMinutes) $set.slotMinutes = body.slotMinutes;
-
-    if (body.weekly) {
-      if (monthKey) {
-        // we must merge or set the particular month's weekly mapping
-        // build a safe object to set under monthly
-        const monthlyMap = existing?.monthly ? mapToPlain<number[]>(existing.monthly) : {};
-        monthlyMap[monthKey] = weeklyMins as any;
-        $set.monthly = monthlyMap as any;
-      } else {
-        // legacy: update top-level weekly mapping
-        $set.weekly = weeklyMins as any;
-      }
-    }
+    if (body.weekly && !monthKey) $set.weekly = weeklyMins as any;
 
     const updated = await TeacherSchedule.findOneAndUpdate(
       { teacherId },

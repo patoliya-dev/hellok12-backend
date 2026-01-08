@@ -1,6 +1,7 @@
 import { DateTime } from 'luxon';
 import { Types, Document } from 'mongoose';
 import { TeacherSchedule, TeacherScheduleDoc } from '../../models/teacherSchedule.model';
+import { Lesson } from '../../models/lesson.model';
 import {
   ensureAligned,
   normalizeMinutes,
@@ -12,7 +13,6 @@ import {
   buildSlotItemsFromMinutes,
   lessonExistsForWeekdaySlot,
   lessonExistsForDateSlot,
-  getLessonMinutesForDate,
   weeklyBaselineForDate,
   getLessonMinuteIntervalsForDate,
   normalizeMinutesArray
@@ -22,18 +22,26 @@ type Lean<T> = Omit<T, keyof Document> & { _id: Types.ObjectId };
 type ScheduleLean = Lean<TeacherScheduleDoc>;
 
 export class ScheduleService {
+  private static isDuplicateKeyError(error: any): boolean {
+    return !!error && error.code === 11000;
+  }
+
   /** Fetch schedule or auto create and fetch schedule */
   static async getOrCreate(teacherId: Types.ObjectId): Promise<ScheduleLean> {
-    const found = await TeacherSchedule.findOne({ teacherId }).lean<ScheduleLean>();
-    if (found) return found;
+    try {
+      const doc = await TeacherSchedule.findOneAndUpdate(
+        { teacherId },
+        { $setOnInsert: { teacherId, slotMinutes: 60, overrides: {} } },
+        { new: true, upsert: true, setDefaultsOnInsert: true }
+      ).lean<ScheduleLean>();
+      if (doc) return doc;
+    } catch (error: any) {
+      if (!this.isDuplicateKeyError(error)) throw error;
+    }
 
-    const created = await TeacherSchedule.create({
-      teacherId,
-      slotMinutes: 60,
-      overrides: {}
-    });
-
-    return (await TeacherSchedule.findById(created._id).lean<ScheduleLean>())!;
+    const fallback = await TeacherSchedule.findOne({ teacherId }).lean<ScheduleLean>();
+    if (fallback) return fallback;
+    throw new Error('Failed to create or fetch schedule');
   }
 
   /** Fetch schedule or null */
@@ -237,13 +245,22 @@ export class ScheduleService {
 
       if (body.slotMinutes) $set.slotMinutes = body.slotMinutes;
 
-      const updated = await TeacherSchedule.findOneAndUpdate(
-        { teacherId },
-        { $set },
-        { new: true, upsert: true }
-      ).lean<ScheduleLean>();
-
-      return updated!;
+      try {
+        const updated = await TeacherSchedule.findOneAndUpdate(
+          { teacherId },
+          { $set, $setOnInsert: { teacherId } },
+          { new: true, upsert: true, setDefaultsOnInsert: true }
+        ).lean<ScheduleLean>();
+        return updated!;
+      } catch (error: any) {
+        if (!this.isDuplicateKeyError(error)) throw error;
+        const updated = await TeacherSchedule.findOneAndUpdate(
+          { teacherId },
+          { $set },
+          { new: true }
+        ).lean<ScheduleLean>();
+        return updated!;
+      }
     }
 
     // --------------------------
@@ -290,13 +307,22 @@ export class ScheduleService {
     if (body.slotMinutes) $set.slotMinutes = body.slotMinutes;
     if (body.weekly && !monthKey) $set.weekly = weeklyMins as any;
 
-    const updated = await TeacherSchedule.findOneAndUpdate(
-      { teacherId },
-      { $set },
-      { new: true, upsert: true }
-    ).lean<ScheduleLean>();
-
-    return updated!;
+    try {
+      const updated = await TeacherSchedule.findOneAndUpdate(
+        { teacherId },
+        { $set, $setOnInsert: { teacherId } },
+        { new: true, upsert: true, setDefaultsOnInsert: true }
+      ).lean<ScheduleLean>();
+      return updated!;
+    } catch (error: any) {
+      if (!this.isDuplicateKeyError(error)) throw error;
+      const updated = await TeacherSchedule.findOneAndUpdate(
+        { teacherId },
+        { $set },
+        { new: true }
+      ).lean<ScheduleLean>();
+      return updated!;
+    }
   }
 
   /** Return available slots for a specific date (override > weekly) as HH:MM[] */
@@ -372,13 +398,13 @@ export class ScheduleService {
     const sched = await this.getOrCreate(teacherId);
     const slot = sched.slotMinutes ?? 60;
 
-    // build monthly weekly baseline from sched.monthly if present else fallback to sched.weekly
+    // build monthly weekly baseline from sched.monthly
     const monthlyMap = (sched as any).monthly || {};
+    const monthEntry = monthlyMap && monthlyMap[monthKey] ? monthlyMap[monthKey] : {};
     const resultWeekly: Partial<Record<number, string[]>> = {};
 
     for (let dow = 0; dow <= 6; dow++) {
       // Use monthly baseline only (do not fallback to legacy weekly)
-      const monthEntry = monthlyMap && monthlyMap[monthKey];
       const arr: number[] = monthEntry && Array.isArray(monthEntry[dow]) ? monthEntry[dow] : [];
       resultWeekly[dow] = (arr || []).map((m: number) => toHHMM(m));
     }
@@ -391,14 +417,39 @@ export class ScheduleService {
     // compute date range for the month
     const [yearStr, monthStr] = monthKey.split('-');
     const y = Number(yearStr);
-    const m = Number(monthStr) - 1;
-    const first = new Date(Date.UTC(y, m, 1));
-    const last = new Date(Date.UTC(y, m + 1, 0));
+    const m = Number(monthStr);
+    const zone = DateTime.now().setZone(timeZone).isValid ? timeZone : 'UTC';
+    const monthStart = DateTime.fromObject({ year: y, month: m, day: 1 }, { zone });
+    const daysInMonth = monthStart.daysInMonth ?? 0;
+
+    const monthStartUtc = monthStart.startOf('day').toUTC().toJSDate();
+    const monthEndUtc = monthStart.endOf('month').endOf('day').toUTC().toJSDate();
+
+    const lessons = await Lesson.find({
+      teacherId,
+      startAt: { $gte: monthStartUtc, $lte: monthEndUtc }
+    })
+      .select({ startAt: 1 })
+      .lean();
+
+    const usedStartsByDate = new Map<string, Set<number>>();
+    for (const l of lessons) {
+      if (!l?.startAt) continue;
+      const start = DateTime.fromJSDate(new Date(l.startAt)).setZone(zone);
+      if (!start.isValid) continue;
+      const dateISO = start.toISODate();
+      if (!dateISO || !dateISO.startsWith(monthKey)) continue;
+      const startMin = Math.max(0, Math.min(24 * 60, start.hour * 60 + start.minute));
+      const set = usedStartsByDate.get(dateISO) || new Set<number>();
+      set.add(startMin);
+      usedStartsByDate.set(dateISO, set);
+    }
+    const emptyUsedStarts = new Set<number>();
 
     // iterate through days in month and prepare slot items
-    for (let d = 1; d <= last.getUTCDate(); d++) {
+    for (let d = 1; d <= daysInMonth; d++) {
       const yyyy = y;
-      const mm = String(m + 1).padStart(2, '0');
+      const mm = String(m).padStart(2, '0');
       const dd = String(d).padStart(2, '0');
       const iso = `${yyyy}-${mm}-${dd}`;
 
@@ -409,19 +460,15 @@ export class ScheduleService {
         effectiveMins = overrideMins || [];
       } else {
         // Monthly-only baseline for that weekday, or empty if month not defined.
-        const dow = weekdayFromISO(iso, timeZone);
-        const baseline =
-          (sched.monthly &&
-            (sched.monthly as any)[monthKey] &&
-            (sched.monthly as any)[monthKey][dow]) ||
-          [];
+        const dow = weekdayFromISO(iso, zone);
+        const baseline = monthEntry && monthEntry[dow] ? monthEntry[dow] : [];
         effectiveMins = Array.isArray(baseline) ? baseline : [];
       }
 
       // build slot items and mark disabled if lessons exist
       const slotItems = buildSlotItemsFromMinutes(effectiveMins, slot);
-      const usedMinutes = await getLessonMinutesForDate(teacherId, iso, timeZone);
-      const finalItems = slotItems.map(s => ({ ...s, disabled: usedMinutes.has(s.minutes) }));
+      const usedStarts = usedStartsByDate.get(iso) || emptyUsedStarts;
+      const finalItems = slotItems.map(s => ({ ...s, disabled: usedStarts.has(s.minutes) }));
 
       slotsByDate[iso] = finalItems;
       if (Object.prototype.hasOwnProperty.call(overridesPlain, iso)) {
@@ -467,15 +514,7 @@ export class ScheduleService {
     }
 
     // Ensure doc exists for mutation (minimal safe defaults)
-    const doc =
-      sched ||
-      (await TeacherSchedule.create({
-        teacherId,
-        slotMinutes: slot,
-        weekly: {},
-        monthly: {},
-        overrides: {}
-      }));
+    const doc = sched || (await this.getOrCreate(teacherId));
 
     // --------------------------
     // 2) Source-of-truth & working set
@@ -552,11 +591,21 @@ export class ScheduleService {
       existingOverrides[body.date] = resulting;
     }
 
-    const updated = await TeacherSchedule.findOneAndUpdate(
-      { teacherId },
-      { $set: { overrides: existingOverrides } },
-      { new: true, upsert: true, lean: true }
-    );
+    let updated: ScheduleLean | null;
+    try {
+      updated = await TeacherSchedule.findOneAndUpdate(
+        { teacherId },
+        { $set: { overrides: existingOverrides }, $setOnInsert: { teacherId } },
+        { new: true, upsert: true, setDefaultsOnInsert: true }
+      ).lean<ScheduleLean>();
+    } catch (error: any) {
+      if (!this.isDuplicateKeyError(error)) throw error;
+      updated = await TeacherSchedule.findOneAndUpdate(
+        { teacherId },
+        { $set: { overrides: existingOverrides } },
+        { new: true }
+      ).lean<ScheduleLean>();
+    }
 
     const updatedOverrides = mapToPlain<number[]>((updated?.overrides as any) || {});
     const hasOverrideAfter = Object.prototype.hasOwnProperty.call(updatedOverrides, body.date);

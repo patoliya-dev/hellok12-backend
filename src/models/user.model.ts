@@ -313,7 +313,6 @@ const UserSchema = new Schema<IUser>(
 );
 
 // Indexes for better performance
-UserSchema.index({ email: 1 });
 UserSchema.index({ role: 1, status: 1 });
 UserSchema.index({ parent: 1 });
 UserSchema.index({ school: 1 });

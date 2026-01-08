@@ -366,7 +366,8 @@ export const authService = {
           email: user.email!,
           name: user.name,
           role: user.role,
-          isVerified: user.isVerified
+          isVerified: user.isVerified,
+          ...((user.role === 'teacher' && user.school && { schoolId: user.school }) || {})
         },
         accessToken,
         refreshToken
@@ -713,7 +714,8 @@ export const authService = {
         children: user.role === 'parent' ? user.children : undefined,
         profile: user[`${role}Profile`],
         schoolName: user[`${role}Profile`]?.schoolName,
-        profileImage: user?.profileImage
+        profileImage: user.profileImage,
+        ...((user.role === 'teacher' && user.school && { schoolId: user.school }) || {})
       };
     } catch (error) {
       Logger.error('Get current user failed:', error);

@@ -118,6 +118,11 @@ export const InvitationService = {
       user.profile = { ...(user.profile || {}), status: 'pending_approval' };
     }
 
+    if (String(inv.recipientRole)?.toLowerCase() === 'student') {
+      user.school = inv.organization || inv.invitedBy;
+      user.status = 'active';
+    }
+
     await user.save();
 
     inv.status = 'accepted';
@@ -130,7 +135,14 @@ export const InvitationService = {
 
     // Return safe DTO if you have one; keeping minimal here
     return {
-      user,
+      user: {
+        id: user._id.toString(),
+        email: user.email!,
+        name: user.name,
+        role: user.role,
+        isVerified: user.isVerified,
+        ...((user.role === 'teacher' && user.school && { schoolId: user.school }) || {})
+      },
       accessToken,
       redirectTo: getRedirectForRole(user.role)
     };

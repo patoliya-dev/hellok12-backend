@@ -7,7 +7,7 @@ function handle(res: Response, error: any) {
   return res.status(status).json(createErrorResponse(error.message || 'Error', 'Error', status));
 }
 
-export const schoolController = {
+export const teachersStudentsInvitationController = {
   getSchoolTeachers: async (req: Request, res: Response) => {
     try {
       const schoolId = req.user?.id as string;
@@ -43,8 +43,18 @@ export const schoolController = {
   listInvitations: async (req: Request, res: Response) => {
     try {
       const schoolId = req.user?.id as string;
-      const { role, status } = req.query;
-      const out = await SchoolService.listInvitations(schoolId, role as string, status as string);
+
+      const { role = '', status = '', search = '', page = '1', limit = '10' } = req.query;
+
+      const out = await SchoolService.listInvitations(
+        schoolId,
+        String(role || ''),
+        String(status || ''),
+        String(search || ''),
+        String(page || '1'),
+        String(limit || '10')
+      );
+
       return res.status(200).json(createSuccessResponse(out, 'Invitations Fetched Successfully'));
     } catch (e: any) {
       return handle(res, e);
@@ -75,9 +85,18 @@ export const schoolController = {
 
   getStudents: async (req: Request, res: Response) => {
     try {
-      const { page = '1', limit = '10' } = req.query;
+      const { page = '1', limit = '10', search = '', status = '' } = req.query;
+
       const schoolId = req.user?.id as string;
-      const out = await SchoolService.getStudents(schoolId, page as string, limit as string);
+
+      const out = await SchoolService.getStudents(
+        schoolId,
+        String(page),
+        String(limit),
+        String(search || ''),
+        String(status || '')
+      );
+
       return res.status(200).json(createSuccessResponse(out, 'Students Fetched Successfully'));
     } catch (e: any) {
       return handle(res, e);

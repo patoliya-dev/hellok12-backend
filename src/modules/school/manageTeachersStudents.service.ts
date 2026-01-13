@@ -1,7 +1,6 @@
 import { Types } from 'mongoose';
 import { User } from '../../models/user.model';
 import emailService from '../../utils/email.service';
-import Logger from '../../utils/winstonLogger.utils';
 import { Course } from '../../models/course.model';
 import bookingModel from '../../models/booking.model';
 import { SessionModel } from '../../models/sessions.model';
@@ -29,6 +28,8 @@ type TeacherLean = {
   teacherProfile?: (TeacherProfileDoc & { _id: any }) | null;
   profileImage?: ProfileImageLean;
 };
+
+const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 export const SchoolService = {
   getSchoolTeachers: async (schoolId: string) => {
@@ -196,17 +197,68 @@ export const SchoolService = {
     };
   },
 
-  listInvitations: async (schoolId: string, role?: string, status?: string) => {
-    const query: any = { organization: new Types.ObjectId(schoolId) };
-    if (role) query.recipientRole = role;
-    if (status) query.status = status;
+  listInvitations: async (
+    schoolId: string,
+    role?: string,
+    status?: string,
+    search?: string,
+    page?: string,
+    limit?: string
+  ) => {
+    const schoolObjectId = new Types.ObjectId(schoolId);
 
-    const invitations = await Invitation.find(query)
-      .sort({ createdAt: -1 })
-      .select('recipientEmail recipientRole status expiresAt createdAt invitationMessage')
-      .lean();
+    const pageNum = Math.max(1, parseInt(String(page || '1'), 10) || 1);
+    const limitNum = Math.max(1, Math.min(100, parseInt(String(limit || '10'), 10) || 10));
+    const skip = (pageNum - 1) * limitNum;
 
-    return { success: true, data: { invitations } };
+    const query: any = { organization: schoolObjectId };
+
+    const normalizedRole = String(role || '')
+      .trim()
+      .toLowerCase();
+    if (normalizedRole) query.recipientRole = normalizedRole;
+
+    const normalizedStatus = String(status || '')
+      .trim()
+      .toLowerCase();
+    if (normalizedStatus) query.status = normalizedStatus;
+
+    if (search && String(search).trim()) {
+      const s = String(search).trim();
+      const rx = new RegExp(escapeRegex(s), 'i');
+
+      // searchable fields (safe + useful)
+      query.$or = [
+        { recipientEmail: rx }
+        // { invitationMessage: rx },
+        // { recipientRole: rx },
+        // { status: rx }
+      ];
+    }
+
+    const [total, invitations] = await Promise.all([
+      Invitation.countDocuments(query),
+      Invitation.find(query)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum)
+        .select('recipientEmail recipientRole status expiresAt createdAt invitationMessage')
+        .lean()
+    ]);
+
+    const pages = Math.max(1, Math.ceil(total / limitNum));
+
+    return {
+      invitations,
+      pagination: {
+        total,
+        page: pageNum,
+        limit: limitNum,
+        pages,
+        hasNextPage: pageNum < pages,
+        hasPrevPage: pageNum > 1
+      }
+    };
   },
 
   cancelInvitation: async (schoolId: string, invitationId: string) => {
@@ -263,64 +315,132 @@ export const SchoolService = {
     return { success: true, data: { rejected: true } };
   },
 
-  // (kept from your existing code)
-  getStudents: async (schoolId: string, page: string, limit: string) => {
-    // keep your existing enrollment-based student listing for now
-    // when you implement Invite Student acceptance linking student.school,
-    // you can later list directly by User.school + role=student.
-    // ... (your existing getStudents code can remain as-is)
+  getStudents: async (
+    schoolId: string,
+    page: string,
+    limit: string,
+    search?: string,
+    status?: string
+  ) => {
+    const schoolObjectId = new Types.ObjectId(schoolId);
 
-    const courses = await Course.find({ ownerId: new Types.ObjectId(schoolId) });
-    const courseIds = courses.map(c => c._id);
-    if (courseIds.length === 0) return [];
-
-    const bookingFilter: any = { course: { $in: courseIds } };
-    const pageNum = parseInt(page);
-    const limitNum = parseInt(limit);
+    const pageNum = Math.max(1, parseInt(String(page || '1'), 10) || 1);
+    const limitNum = Math.max(1, Math.min(100, parseInt(String(limit || '10'), 10) || 10));
     const skip = (pageNum - 1) * limitNum;
 
-    const total = await bookingModel.countDocuments(bookingFilter);
+    // A) Students enrolled in school-owned courses
+    const courses = await Course.find({ ownerId: schoolObjectId }).select('_id').lean();
+    const courseIds = courses.map(c => c._id);
 
-    const bookings = await bookingModel
-      .find(bookingFilter)
-      .populate({
-        path: 'student',
-        select: 'name email phone profile.age profile.grade profile.gender status',
-        populate: [
-          { path: 'studentProfile', select: 'address languages age gender' },
-          { path: 'profileImage', select: 'url' }
-        ],
-        options: { virtuals: true }
-      })
-      .skip(skip)
-      .limit(limitNum);
+    let enrolledStudentIds: Types.ObjectId[] = [];
 
-    const enrollments = bookings.map((booking: any) => ({
-      _id: booking.student._id,
-      name: booking.student.name,
-      email: booking.student.email,
-      phone: booking.student.phone,
-      profile: booking.student.studentProfile,
-      profileImage: booking.student.profileImage,
-      status: booking.student.status,
-      createdAt: booking.createdAt,
-      updatedAt: booking.updatedAt
-    }));
+    if (courseIds.length > 0) {
+      const raw = await bookingModel.distinct('student', {
+        course: { $in: courseIds }
+      });
 
-    const pages = Math.ceil(total / limitNum);
+      enrolledStudentIds = (raw || [])
+        .map((id: any) => {
+          if (id instanceof Types.ObjectId) return id;
+          const s = String(id);
+          return Types.ObjectId.isValid(s) ? new Types.ObjectId(s) : null;
+        })
+        .filter((x): x is Types.ObjectId => Boolean(x));
+    }
 
-    return {
-      success: true,
-      data: {
-        students: enrollments,
+    // B) Students who accepted school invitation (linked to school)
+    const invitedStudentIds = await User.distinct('_id', {
+      role: 'student',
+      school: schoolObjectId
+    });
+
+    // Union (unique ObjectIds)
+    const uniqueIds = Array.from(
+      new Set([...enrolledStudentIds, ...invitedStudentIds].map(id => String(id)))
+    ).map(id => new Types.ObjectId(id));
+
+    if (uniqueIds.length === 0) {
+      return {
+        students: [],
         pagination: {
-          total,
+          total: 0,
           page: pageNum,
           limit: limitNum,
-          pages,
-          hasNextPage: pageNum < pages,
-          hasPrevPage: pageNum > 1
+          pages: 1,
+          hasNextPage: false,
+          hasPrevPage: false
         }
+      };
+    }
+
+    const userQuery: any = {
+      _id: { $in: uniqueIds },
+      role: 'student'
+    };
+
+    const normalizedStatus = String(status || '')
+      .trim()
+      .toLowerCase();
+    if (normalizedStatus) userQuery.status = normalizedStatus;
+
+    const term = String(search || '').trim();
+
+    if (term) {
+      // If it looks like an ObjectId, allow exact match
+      const maybeId = Types.ObjectId.isValid(term) ? new Types.ObjectId(term) : null;
+
+      // Escape regex for safe partial search
+      const safe = escapeRegex(term);
+      const rx = new RegExp(safe, 'i');
+
+      userQuery.$or = [
+        ...(maybeId ? [{ _id: maybeId }] : []),
+        { name: rx },
+        { email: rx },
+        { phone: rx }
+      ];
+    }
+
+    const total = await User.countDocuments(userQuery);
+
+    const users = await User.find(userQuery)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limitNum)
+      .select('name email phone status profile createdAt updatedAt')
+      .populate([
+        {
+          path: 'studentProfile',
+          select: 'address languages age gender',
+          options: { lean: true }
+        },
+        { path: 'profileImage', select: 'url', options: { lean: true } }
+      ])
+      .lean({ virtuals: true });
+
+    const students = users.map((u: any) => ({
+      _id: u._id,
+      name: u.name,
+      email: u.email,
+      phone: u.phone,
+      profile: u.studentProfile || u.profile || null,
+      profileImage: u.profileImage || null,
+      status: u.status,
+      createdAt: u.createdAt,
+      updatedAt: u.updatedAt
+    }));
+
+    const pages = Math.max(1, Math.ceil(total / limitNum));
+
+    return {
+      students,
+      pagination: {
+        total,
+        page: pageNum,
+        limit: limitNum,
+        pages,
+        hasNextPage: pageNum < pages,
+        hasPrevPage: pageNum > 1
       }
     };
   },

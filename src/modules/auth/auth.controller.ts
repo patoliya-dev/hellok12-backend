@@ -215,9 +215,8 @@ export const authController = {
         return res.status(400).json(createErrorResponse('Missing userId', 'Bad Request', 400));
       }
 
-      // Recommended: allow only self update (unless you explicitly want admin override)
-      if (!req.user?.id || String(req.user.id) !== String(userId)) {
-        return res.status(403).json(createErrorResponse('Forbidden', 'Forbidden', 403));
+      if (!req.user?.id) {
+        return res.status(401).json(createErrorResponse('Unauthorized', 'Unauthorized', 401));
       }
 
       const user = await authService.updateCurrentUser({

@@ -320,6 +320,8 @@ UserSchema.index({ school: 1 });
 UserSchema.index({ role: 1, school: 1 });
 UserSchema.index({ createdAt: -1 });
 UserSchema.index({ lastLogin: -1 });
+UserSchema.index({ name: 1 });
+UserSchema.index({ phone: 1 });
 
 // Compound indexes
 UserSchema.index({ role: 1, isVerified: 1, status: 1 });

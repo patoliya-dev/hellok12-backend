@@ -12,11 +12,11 @@ import { LessonDoc } from '../../models/lesson.model';
 import { Types } from 'mongoose';
 import { AuthenticatedRequest } from '../../middlewares/auth';
 import sessionService from '../sessions/sessions.service';
-import { UserPayload } from '../../types/UserPayload';
 import { SessionStatus } from '../../models/sessions.model';
 import bookingModel from '../../models/booking.model';
 import { CoursesListResponse, LessonListResponse, LessonViewType } from '../../types/LessonTypes';
 import { normalizeTimezone } from './lesson.util';
+import { recomputeCourseTeachers } from '../courses/course.helper';
 
 export const createLesson = async (req: Request, res: Response) => {
   const parsed = lessonCreateSchema.safeParse(req.body);
@@ -237,6 +237,8 @@ export const bulkCreateForCourse = async (req: Request, res: Response) => {
       userRole
     });
 
+    await recomputeCourseTeachers(courseId);
+
     const course = await CourseService.getById(req.params.courseId);
 
     const enrolledStudents = await bookingModel
@@ -308,6 +310,8 @@ export const bulkUpdateForCourse = async (req: Request, res: Response) => {
       deletes,
       timeZone
     });
+
+    await recomputeCourseTeachers(courseId);
     return res.status(200).json(createSuccessResponse(result, 'Lessons updated', 200));
   } catch (err: any) {
     switch (err.code) {
@@ -334,13 +338,21 @@ export const bulkUpdateForCourse = async (req: Request, res: Response) => {
 
 export const getLessonsDashboard = async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const userId = req.user?.id;
+    const user = req.user;
+    if (!user?.id || !user?.role) {
+      return res.status(401).json(createErrorResponse('Unauthorized', 'Unauthorized', 401));
+    }
+
     const rawTz = req.userTimezone || 'UTC';
     const timeZone = normalizeTimezone(rawTz);
-    const lessons = await LessonService.getLessonsDashboard(userId!, timeZone);
+
+    const lessons = await LessonService.getLessonsDashboard({
+      userId: user.id,
+      role: user.role, // teacher | school
+      timeZone
+    });
 
     return res.json(createSuccessResponse({ lessons }, 'Lessons dashboard', 200));
-    // return res.json(createSuccessResponse({ lessons, course }));
   } catch (error) {
     return res
       .status(500)
@@ -350,26 +362,26 @@ export const getLessonsDashboard = async (req: AuthenticatedRequest, res: Respon
 
 export async function getCalendarOverview(req: Request, res: Response) {
   try {
-    const { month, year } = req.query;
+    const { month, year, teacherId } = req.query;
     const user = (req as any).user;
 
     if (!month || !year) {
-      return res.status(400).json({
-        success: false,
-        error: 'month and year query params are required'
-      });
+      return res
+        .status(400)
+        .json(createErrorResponse('month and year are required', 'Bad Request', 400));
     }
 
     const rawTz = req.userTimezone || 'UTC';
     const timeZone = normalizeTimezone(rawTz);
 
-    const data = await LessonService.getCalendarOverview(
-      user.id,
-      user.role,
-      parseInt(month as string),
-      parseInt(year as string),
-      timeZone
-    );
+    const data = await LessonService.getCalendarOverview({
+      userId: user.id,
+      role: String(user.role),
+      month: Number(month),
+      year: Number(year),
+      timeZone,
+      teacherId: teacherId ? String(teacherId) : undefined
+    });
 
     return res.json(createSuccessResponse(data, 'Calendar data', 200));
   } catch (err) {
@@ -696,5 +708,80 @@ export async function getLessonsForStudentPage(req: Request, res: Response): Pro
       success: false,
       message: 'Failed to fetch lessons'
     });
+  }
+}
+
+export const getUpcomingLessons = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const user = req.user;
+    if (!user?.id || !user?.role) {
+      return res.status(401).json(createErrorResponse('Unauthorized', 'Unauthorized', 401));
+    }
+
+    const rawTz = req.userTimezone || 'UTC';
+
+    const timeZone = normalizeTimezone(rawTz);
+
+    const limit = Math.min(Math.max(Number(req.query.limit || 10), 1), 50);
+    const days = Math.min(Math.max(Number(req.query.days || 7), 1), 30);
+    const courseId = req.query.courseId ? String(req.query.courseId) : undefined;
+
+    const lessons = await LessonService.getUpcomingLessons({
+      userId: user.id,
+      role: String(user.role),
+      timeZone,
+      limit,
+      days,
+      courseId
+    });
+
+    return res.status(200).json(createSuccessResponse({ lessons }, 'Upcoming lessons', 200));
+  } catch (error: any) {
+    return res
+      .status(500)
+      .json(createErrorResponse('Failed to get upcoming lessons', error?.message || 'Error', 500));
+  }
+};
+
+export async function getLessonsForSchoolPage(req: Request, res: Response): Promise<Response> {
+  try {
+    const schoolId = (req as any)?.user?.id as string;
+    if (!schoolId) {
+      return res.status(401).json(createErrorResponse('Unauthorized', 'Unauthorized', 401));
+    }
+
+    const { courseId, view, page, limit, studentName, status } = req.query;
+
+    const viewType = (view as LessonViewType) || LessonViewType.UPCOMING;
+    if (viewType !== LessonViewType.UPCOMING && viewType !== LessonViewType.HISTORY) {
+      return res
+        .status(400)
+        .json(createErrorResponse('Invalid view. Use "upcoming" or "history"', 'Bad Request', 400));
+    }
+
+    const pageNum = page ? parseInt(page as string, 10) : 1;
+    const limitNum = limit ? parseInt(limit as string, 10) : 10;
+
+    if (pageNum < 1 || limitNum < 1 || limitNum > 100) {
+      return res
+        .status(400)
+        .json(createErrorResponse('Invalid pagination parameters', 'Bad Request', 400));
+    }
+
+    const data = await LessonService.getSchoolLessons({
+      schoolId,
+      courseId: courseId ? String(courseId) : undefined,
+      view: viewType,
+      page: pageNum,
+      limit: limitNum,
+      studentName: studentName ? String(studentName) : undefined,
+      status: status ? String(status) : undefined
+    });
+
+    return res.status(200).json(createSuccessResponse(data, 'School lessons fetched', 200));
+  } catch (error: any) {
+    return res
+      .status(500)
+      .json(createErrorResponse('Failed to fetch school lessons', error?.message || 'Error', 500));
   }
 }

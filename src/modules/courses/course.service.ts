@@ -319,5 +319,23 @@ export const CourseService = {
     } catch (error: any) {
       throw new Error(error.message);
     }
+  },
+
+  async listCoursesForSchool(args: { schoolId: string; status?: 'draft' | 'active' | 'archived' }) {
+    const { schoolId, status } = args;
+
+    const filter: any = {
+      ownerType: 'school',
+      ownerId: schoolId
+    };
+    if (status) filter.status = status;
+
+    // For dropdown: keep payload small
+    const courses = await Course.find(filter)
+      .select('_id title status mode lessonType startDate endDate')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return courses;
   }
 };

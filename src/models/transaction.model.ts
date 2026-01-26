@@ -56,4 +56,7 @@ const TransactionSchema = new Schema<ITransaction>({
   updatedAt: { type: Date, default: Date.now }
 });
 
+TransactionSchema.index({ payee: 1, status: 1, createdAt: -1 });
+TransactionSchema.index({ booking: 1, status: 1 });
+
 export default mongoose.model<ITransaction>('Transaction', TransactionSchema);

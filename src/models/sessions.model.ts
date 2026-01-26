@@ -91,9 +91,10 @@ const SessionSchema = new Schema<ISession>(
 );
 
 SessionSchema.index({ start: 1 });
-
+SessionSchema.index({ course: 1, start: 1 });
 SessionSchema.index({ teacher: 1, start: 1 });
-
 SessionSchema.index({ course: 1, lesson: 1 });
+SessionSchema.index({ course: 1, start: 1, status: 1 });
+SessionSchema.index({ course: 1, start: 1, status: 1, teacher: 1 });
 
 export const SessionModel = model<ISession>('Session', SessionSchema);

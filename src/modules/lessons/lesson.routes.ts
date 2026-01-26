@@ -56,7 +56,7 @@ r.get(
 r.get(
   '/getLessonsForStudent/:studentId',
   authenticate,
-  authorize([USER_ROLES.STUDENT, USER_ROLES.PARENT]),
+  authorize([USER_ROLES.STUDENT, USER_ROLES.PARENT, USER_ROLES.SCHOOL]),
   ctrl.getLessonsForStudent
 );
 
@@ -89,5 +89,15 @@ r.get(
   authorize([USER_ROLES.PARENT, USER_ROLES.STUDENT, USER_ROLES.SCHOOL]),
   ctrl.getLessonsForStudentPage
 );
+
+r.get(
+  '/upcoming',
+  authenticate,
+  authorize([USER_ROLES.SCHOOL, USER_ROLES.TEACHER]),
+  ctrl.getUpcomingLessons
+);
+
+// School "View All" upcoming/history (NO studentId)
+r.get('/schoolLessons', authenticate, authorize([USER_ROLES.SCHOOL]), ctrl.getLessonsForSchoolPage);
 
 export default r;

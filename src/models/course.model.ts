@@ -80,8 +80,12 @@ const CourseSchema = new Schema<CourseDoc>(
 );
 
 // useful indexes for list filters & sorts
-CourseSchema.index({ createdAt: -1 });
 CourseSchema.index({ title: 1 });
+CourseSchema.index({ teacherId: 1 });
+CourseSchema.index({ createdAt: -1 });
+CourseSchema.index({ status: 1, teachers: 1 });
 CourseSchema.index({ startDate: 1, endDate: 1 });
+CourseSchema.index({ ownerId: 1, ownerType: 1, status: 1 });
+CourseSchema.index({ ownerType: 1, ownerId: 1, status: 1, createdAt: -1 });
 
 export const Course = model<CourseDoc>('Course', CourseSchema);

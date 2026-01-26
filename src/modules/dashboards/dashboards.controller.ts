@@ -1,6 +1,35 @@
 import { Request, Response } from 'express';
-import { StudentDashboardService, teacherDashboardService } from './dashboards.service';
+import {
+  StudentDashboardService,
+  teacherDashboardService,
+  SchoolDashboardService
+} from './dashboards.service';
 import { getWeekRangeFromISO, normalizeTimezone } from '../lessons/lesson.util';
+import { AuthenticatedRequest } from '../../middlewares/auth';
+import { createErrorResponse, createSuccessResponse } from '../../utils/apiResponse';
+
+export const getSchoolMetrics = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const schoolId = req.user?.id;
+    if (!schoolId) {
+      return res.status(401).json(createErrorResponse('Unauthorized', 'Unauthorized', 401));
+    }
+
+    const rawTz = req.userTimezone || 'UTC';
+    const timeZone = normalizeTimezone(rawTz);
+
+    const data = await SchoolDashboardService.getSchoolMetrics({
+      schoolId,
+      timeZone
+    });
+
+    return res.json(createSuccessResponse(data, 'School metrics', 200));
+  } catch (e: any) {
+    return res
+      .status(500)
+      .json(createErrorResponse('Failed to load school metrics', 'Internal Server Error', 500));
+  }
+};
 
 export const getDashboardStatsController = async (req: Request, res: Response): Promise<void> => {
   const teacherId = req.user?.id;

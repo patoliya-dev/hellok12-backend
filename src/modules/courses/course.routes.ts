@@ -51,4 +51,6 @@ r.post(
 r.get('/:id/details', courseCtrl.courseDetails);
 r.get('/:id/feedbacks', courseCtrl.courseFeedbacks);
 
+r.get('/school/courses', authenticate, authorize([USER_ROLES.SCHOOL]), courseCtrl.getSchoolCourses);
+
 export default r;

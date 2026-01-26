@@ -218,23 +218,11 @@ export async function lessonExistsForDateSlot(
   minute: number,
   timeZone: string = 'UTC'
 ): Promise<boolean> {
-  // compute UTC start/end for the teacher-local date
-  const { start: dateStart, end: dateEnd } = getDayRangeFromISO(dateISO, timeZone);
+  // Use the timezone-correct interval resolver
+  const intervals = await getLessonMinuteIntervalsForDate(teacherId, dateISO, timeZone);
 
-  const lessons = await Lesson.find({
-    teacherId,
-    startAt: { $gte: dateStart, $lte: dateEnd }
-  })
-    .select({ schedule: 1, startAt: 1 })
-    .lean();
-
-  for (const l of lessons) {
-    if (!l?.startAt || !l?.schedule?.time) continue;
-    const hhmm = parseTimeToMinutes(l.schedule.time, l.startAt);
-    // console.debug(`Checking lessonExistsForDateSlot: startAt=${l.startAt}, time=${l.schedule.time}, hhmm=${hhmm}, minute=${minute}`);
-    if (Number.isFinite(hhmm) && hhmm === minute) return true;
-  }
-  return false;
+  // Slot is considered "used" if any lesson starts exactly on that minute
+  return intervals.some(iv => iv.start === minute);
 }
 
 type Lean<T> = Omit<T, keyof Document> & { _id: Types.ObjectId };

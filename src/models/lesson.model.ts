@@ -58,6 +58,8 @@ LessonSchema.index({ isTrialAvailable: 1, startAt: 1 });
 LessonSchema.index({ courseId: 1, startAt: -1 });
 LessonSchema.index({ courseId: 1, title: 1 });
 LessonSchema.index({ courseId: 1, status: 1 });
+LessonSchema.index({ teacherId: 1, courseId: 1 });
 LessonSchema.index({ teacherId: 1, schedule: 1 });
+LessonSchema.index({ teacherId: 1, startAt: 1 });
 
 export const Lesson = model<LessonDoc>('Lesson', LessonSchema);

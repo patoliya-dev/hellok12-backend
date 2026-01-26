@@ -1,5 +1,5 @@
 import { DateTime } from 'luxon';
-import { FilterQuery, Types } from 'mongoose';
+import { FilterQuery, SortOrder, Types } from 'mongoose';
 import { Lesson, LessonDoc } from '../../models/lesson.model';
 import { Course } from '../../models/course.model';
 import { LessonItemInput } from './lesson.schemas';
@@ -19,6 +19,7 @@ import Logger from '../../utils/winstonLogger.utils';
 import { FeedbackRating } from '../../models/feedbackRatings.model';
 import BookingModel from '../../models/booking.model';
 import { CourseOption, LessonItem, LessonListQuery, LessonViewType } from '../../types/LessonTypes';
+import { User } from '../../models/user.model';
 
 interface GetLessonsQuery {
   teacherId: string;
@@ -30,43 +31,6 @@ interface GetLessonsQuery {
   sortOrder?: 'asc' | 'desc';
   page?: number;
   limit?: number;
-}
-
-interface LessonResponse {
-  _id: string;
-  dateTime: {
-    date: string;
-    time: string;
-  };
-  student:
-    | {
-        _id: string;
-        name: string;
-        age: number;
-      }
-    | Array<{
-        _id: string;
-        name: string;
-        age: number;
-      }>;
-  courseType: '1-on-1' | 'group';
-  subject: {
-    name: string;
-    mode: 'online' | 'in-person';
-  };
-  duration: number;
-  status: SessionStatus;
-}
-
-interface PaginatedResponse {
-  lessons: LessonResponse[];
-  pagination: {
-    total: number;
-    page: number;
-    limit: number;
-    totalPages: number;
-  };
-  pendingCount: number;
 }
 
 type CreateArgs = {
@@ -87,6 +51,7 @@ type UpdateArgs = {
     trialCapacity?: number;
     order?: number;
     vocabulary?: string[];
+    teacherId: Types.ObjectId;
   }>;
   deletes: string[];
   timeZone?: string;
@@ -102,36 +67,6 @@ type ListOpts = {
   page: number;
   limit: number;
 };
-
-// Calendar types
-interface CalendarQuery {
-  userId: Types.ObjectId;
-  userRole: string;
-  month: number;
-  year: number;
-  courseId?: string;
-}
-
-interface MonthOverview {
-  [date: string]: { count: number; lessons: { id: string; title: string; time: string }[] };
-}
-
-interface DaySession {
-  _id: Types.ObjectId;
-  title: string;
-  time: string;
-  duration: number;
-  status: string;
-  courseTitle?: string;
-  lessonId: Types.ObjectId;
-  order: number;
-}
-
-interface QuickStats {
-  total: number;
-  pending: number;
-  completed: number;
-}
 
 const defaultSort: Record<string, 1 | -1> = { startAt: -1, _id: 1 };
 
@@ -154,39 +89,6 @@ function fromKeyDir(key?: string, dir?: 'asc' | 'desc') {
 async function getNextOrderForCourse(courseId: Types.ObjectId) {
   const latest = await Lesson.findOne({ courseId }).sort({ order: -1 }).select({ order: 1 }).lean();
   return (latest?.order ?? -1) + 1;
-}
-
-async function checkOverlap({
-  teacherId,
-  courseId,
-  startAt,
-  endAt,
-  exceptId
-}: {
-  teacherId: Types.ObjectId;
-  courseId: Types.ObjectId;
-  startAt: Date;
-  endAt: Date;
-  exceptId?: Types.ObjectId;
-}) {
-  const query: any = {
-    teacherId,
-    courseId,
-    status: { $ne: 'archived' },
-    // find any lesson where start < endAt and end > startAt
-    startAt: { $lt: endAt },
-    endAt: { $gt: startAt }
-  };
-  if (exceptId) query._id = { $ne: exceptId };
-  const clash = await Lesson.findOne(query)
-    .select({ _id: 1, title: 1, startAt: 1, endAt: 1 })
-    .lean();
-  if (clash) {
-    const e: any = new Error('Lesson time overlaps with an existing lesson');
-    e.code = '409_CONFLICT_OVERLAP';
-    e.meta = { clash };
-    throw e;
-  }
 }
 
 async function recomputeCourseTrialAvailability(courseId: Types.ObjectId) {
@@ -217,92 +119,219 @@ function calculateDuration(start: Date, end: Date): number {
   return Math.round((end.getTime() - start.getTime()) / 60000);
 }
 
-export const LessonService = {
-  async getCalendarOverview(
-    userId: Types.ObjectId | string,
-    userRole: 'teacher' | 'student' | 'school',
-    month: number,
-    year: number,
-    timeZone: string
-  ) {
-    const uid = typeof userId === 'string' ? new Types.ObjectId(userId) : userId;
-    const role = userRole?.toLowerCase();
+type CalendarArgs = {
+  userId: string;
+  role: string;
+  month: number;
+  year: number;
+  timeZone: string;
+  teacherId?: string; // school filter
+};
 
-    // choose a timezone. If controller passes user timezone, receive it (see below).
-    // For teacher/student views prefer user's timezone; if not available default to UTC.
-    const startOfMonth = DateTime.fromObject({ year, month }, { zone: timeZone })
+export const LessonService = {
+  async getCalendarOverview(args: CalendarArgs) {
+    const { userId, role, month, year, timeZone, teacherId } = args;
+    const r = String(role || '').toLowerCase();
+
+    const uid = new Types.ObjectId(userId);
+
+    // Month boundaries in USER TZ, then convert to UTC for DB filtering
+    const startUtc = DateTime.fromObject({ year, month }, { zone: timeZone })
       .startOf('month')
       .toUTC()
       .toJSDate();
-    const endOfMonth = DateTime.fromObject({ year, month }, { zone: timeZone })
+
+    const endUtc = DateTime.fromObject({ year, month }, { zone: timeZone })
       .endOf('month')
       .toUTC()
       .toJSDate();
 
-    // Build user filter
-    const userFilter: any = {};
+    // ---- base match ----
+    const match: any = {
+      start: { $gte: startUtc, $lte: endUtc },
+      status: { $ne: SessionStatus.CANCELLED }
+    };
 
-    if (role === 'teacher') {
-      userFilter.teacher = uid;
-    } else if (role === 'student') {
-      userFilter.students = uid;
-    } else if (role === 'school') {
-      const schoolCourses = await Course.find({
+    let schoolTeacherOptions: Array<{ value: string; label: string }> | undefined;
+
+    // ---- role constraints ----
+    if (r === 'teacher') {
+      match.teacher = uid; // teacher’s own sessions
+    } else if (r === 'school') {
+      // ONLY ACTIVE school-owned courses
+      const courseDocs = await Course.find({
+        ownerType: 'school',
         ownerId: uid,
-        ownerType: 'school'
+        status: 'active'
       })
         .select('_id')
         .lean();
 
-      if (schoolCourses.length > 0) {
-        userFilter.course = { $in: schoolCourses.map(c => c._id) };
+      const ids = courseDocs.map(c => c._id);
+      match.course = { $in: ids.length ? ids : [new Types.ObjectId()] };
+
+      // optional teacher filter
+      if (teacherId && teacherId !== 'all') {
+        match.teacher = new Types.ObjectId(teacherId);
       }
+
+      // dropdown: active teachers under school
+      const teachers = await User.find({
+        role: 'teacher',
+        school: uid,
+        status: 'active'
+      })
+        .select('_id name')
+        .sort({ name: 1 })
+        .lean();
+
+      schoolTeacherOptions = [
+        { value: 'all', label: 'All Teachers' },
+        ...teachers.map(t => ({ value: String(t._id), label: t.name }))
+      ];
+    } else {
+      return { monthOverview: {}, stats: { total: 0, pending: 0, completed: 0 } };
     }
 
-    const monthFilter = {
-      ...userFilter,
-      start: { $gte: startOfMonth, $lte: endOfMonth }
-    };
+    /**
+     * IMPORTANT:
+     * Enforce "course.status = active" at aggregation level too.
+     * This is REQUIRED for teacher role (teacher can have sessions from non-active courses)
+     * and is a defensive guarantee for school role.
+     */
 
-    const allSessions = await SessionModel.find(monthFilter)
-      .populate('lesson', 'title')
-      .sort({ start: 1 })
-      .lean();
+    const pipeline: any[] = [
+      { $match: match },
 
-    // Build month overview (grouped by date)
-    const monthOverview: Record<
-      string,
+      // --- join course and enforce active ---
       {
-        count: number;
-        lessons: { id: string; title: string; time: string }[];
+        $lookup: {
+          from: 'courses',
+          localField: 'course',
+          foreignField: '_id',
+          as: 'courseDoc'
+        }
+      },
+      { $unwind: { path: '$courseDoc', preserveNullAndEmptyArrays: false } },
+      { $match: { 'courseDoc.status': 'active' } }, // active course only
+
+      // join lesson title
+      {
+        $lookup: {
+          from: 'lessons',
+          localField: 'lesson',
+          foreignField: '_id',
+          as: 'lessonDoc'
+        }
+      },
+      { $unwind: { path: '$lessonDoc', preserveNullAndEmptyArrays: true } },
+
+      // join teacher name (important for school UI)
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'teacher',
+          foreignField: '_id',
+          as: 'teacherDoc'
+        }
+      },
+      { $unwind: { path: '$teacherDoc', preserveNullAndEmptyArrays: true } },
+
+      // dateKey in user timezone (critical for calendar rendering)
+      {
+        $addFields: {
+          dateKey: {
+            $dateToString: {
+              date: '$start',
+              format: '%Y-%m-%d',
+              timezone: timeZone
+            }
+          }
+        }
+      },
+
+      // keep only what we need downstream
+      {
+        $project: {
+          _id: 1,
+          start: 1,
+          status: 1,
+          dateKey: 1,
+          title: { $ifNull: ['$lessonDoc.title', 'Untitled'] },
+          teacher: {
+            _id: '$teacherDoc._id',
+            name: '$teacherDoc.name'
+          }
+        }
+      },
+
+      // Use facet so we compute monthOverview + stats in one pass
+      {
+        $facet: {
+          monthGrouped: [
+            { $sort: { start: 1 } },
+            {
+              $group: {
+                _id: '$dateKey',
+                count: { $sum: 1 },
+                lessons: {
+                  $push: {
+                    id: { $toString: '$_id' },
+                    title: '$title',
+                    start: '$start',
+                    teacher: '$teacher',
+                    status: '$status'
+                  }
+                }
+              }
+            },
+            { $sort: { _id: 1 } }
+          ],
+          statsAgg: [
+            {
+              $group: {
+                _id: null,
+                total: { $sum: 1 },
+                pending: {
+                  $sum: {
+                    $cond: [
+                      {
+                        $in: ['$status', [SessionStatus.SCHEDULED, SessionStatus.IN_PROGRESS]]
+                      },
+                      1,
+                      0
+                    ]
+                  }
+                },
+                completed: {
+                  $sum: { $cond: [{ $eq: ['$status', SessionStatus.COMPLETED] }, 1, 0] }
+                }
+              }
+            }
+          ]
+        }
       }
-    > = {};
+    ];
 
-    for (const session of allSessions) {
-      const dateKey = session.start.toISOString().split('T')[0];
+    const result = await SessionModel.aggregate(pipeline);
 
-      if (!monthOverview[dateKey]) {
-        monthOverview[dateKey] = { count: 0, lessons: [] };
-      }
+    const monthGrouped = result?.[0]?.monthGrouped || [];
+    const statsRow = result?.[0]?.statsAgg?.[0] || { total: 0, pending: 0, completed: 0 };
 
-      monthOverview[dateKey].count++;
-      monthOverview[dateKey].lessons.push({
-        id: session._id.toString(),
-        title: (session.lesson as any)?.title || 'Untitled',
-        time: formatTime(session.start, timeZone)
-      });
+    // build monthOverview object
+    const monthOverview: Record<string, { count: number; lessons: any[] }> = {};
+    for (const day of monthGrouped) {
+      monthOverview[day._id] = {
+        count: day.count,
+        lessons: day.lessons
+      };
     }
 
-    // Calculate stats
-    const stats = {
-      total: allSessions.length,
-      pending: allSessions.filter(
-        s => s.status === SessionStatus.SCHEDULED || s.status === SessionStatus.IN_PROGRESS
-      ).length,
-      completed: allSessions.filter(s => s.status === SessionStatus.COMPLETED).length
+    return {
+      monthOverview,
+      stats: { total: statsRow.total, pending: statsRow.pending, completed: statsRow.completed },
+      ...(schoolTeacherOptions ? { teachers: schoolTeacherOptions } : {})
     };
-
-    return { monthOverview, stats };
   },
 
   async getSessionsByDate(
@@ -374,11 +403,36 @@ export const LessonService = {
     }));
   },
 
-  async getLessonsDashboard(userId: string, timeZone: string) {
+  async getLessonsDashboard(args: { userId: string; role: string; timeZone: string }) {
+    const { userId, role, timeZone } = args;
+
     const start = DateTime.now().setZone(timeZone).startOf('day').toUTC().toJSDate();
     const end = DateTime.now().setZone(timeZone).endOf('day').toUTC().toJSDate();
 
-    const lessons = await SessionModel.find({ teacher: userId, start: { $gte: start, $lt: end } })
+    const r = String(role || '').toLowerCase();
+
+    // Build filter depending on role
+    const filter: any = { start: { $gte: start, $lt: end } };
+
+    if (r === 'teacher') {
+      filter.teacher = new Types.ObjectId(userId);
+    } else if (r === 'school') {
+      // sessions belonging to school's courses
+      const schoolCourses = await Course.find({
+        ownerId: new Types.ObjectId(userId),
+        ownerType: 'school'
+      })
+        .select('_id')
+        .lean();
+
+      const courseIds = schoolCourses.map(c => c._id);
+      filter.course = { $in: courseIds.length ? courseIds : [new Types.ObjectId()] }; // safe-empty
+    } else {
+      // fallback: return empty for other roles
+      return [];
+    }
+
+    const lessons = await SessionModel.find(filter)
       .populate({
         path: 'lesson',
         select: 'title _id schedule status startAt endAt description isTrialAvailable',
@@ -390,10 +444,16 @@ export const LessonService = {
       })
       .populate({
         path: 'course',
-        select: 'title _id mode description lessonType',
+        select: 'title _id mode description lessonType address',
         populate: { path: 'introImageRef', select: 'url' }
       })
-      .select('joinUrl status')
+      .populate({
+        path: 'teacher',
+        select: 'name _id',
+        populate: { path: 'profileImage', select: 'url' }
+      })
+      .select('joinUrl status start end')
+      .sort({ start: 1 })
       .lean();
 
     return lessons;
@@ -611,8 +671,15 @@ export const LessonService = {
 
     for (let i = 0; i < lessons.length; i++) {
       const l = lessons[i];
-      const teacherId: Types.ObjectId =
-        userRole === 'teacher' ? (course as any).ownerId : l.teacherId;
+      const teacherId: Types.ObjectId = l.teacherId
+        ? new Types.ObjectId(l.teacherId)
+        : userRole === 'teacher'
+          ? new Types.ObjectId(course.ownerId)
+          : (() => {
+              const e = new Error('Teacher is required for lesson');
+              (e as any).code = '422_VALIDATION';
+              throw e;
+            })();
 
       if (!l.schedule?.time || !l.schedule?.date) {
         const e = new Error('Missing schedule time/date');
@@ -756,22 +823,28 @@ export const LessonService = {
       (e as any).code = '404_NOT_FOUND';
       throw e;
     }
-    const teacherId: Types.ObjectId = (course as any).teacherId || (course as any).ownerId;
 
     const ops: any[] = [];
-    const sessionsToUpdate: Array<{ lessonId: string; startAt: Date; endAt: Date }> = [];
+    const sessionsToUpdate: Array<{
+      lessonId: string;
+      startAt: Date;
+      endAt: Date;
+      teacherId: string;
+    }> = [];
 
-    // collect delete ops first
+    // 0) Delete ops
     for (const id of deletes || []) {
       if (!Types.ObjectId.isValid(id)) continue;
-      ops.push({ deleteOne: { filter: { _id: new Types.ObjectId(id), courseId } } });
+      ops.push({
+        deleteOne: { filter: { _id: new Types.ObjectId(id), courseId } }
+      });
     }
 
-    // 1) Pre-parse all updates that contain schedule changes and compute canonical UTC intervals
+    // 1) Pre-parse updates
     const parsedUpdates: Array<{
       lessonId: Types.ObjectId;
       index: number;
-      original: any;
+      teacherId: Types.ObjectId;
       mergedSchedule?: { date: any; time: string; duration: number };
       startAtUtc?: Date;
       endAtUtc?: Date;
@@ -779,12 +852,29 @@ export const LessonService = {
     }> = [];
 
     let updIndex = 0;
+
     for (const u of updates || []) {
       if (!Types.ObjectId.isValid(u.lessonId)) {
         updIndex++;
         continue;
       }
-      const _id = new Types.ObjectId(u.lessonId);
+
+      const lessonId = new Types.ObjectId(u.lessonId);
+
+      // fetch existing lesson ONCE
+      const base = await Lesson.findOne({ _id: lessonId, courseId })
+        .select({ schedule: 1, teacherId: 1, startAt: 1, endAt: 1 })
+        .lean();
+
+      if (!base) {
+        updIndex++;
+        continue;
+      }
+
+      // 🔧 FIX: allow teacher reassignment
+      const targetTeacherId = Types.ObjectId.isValid(u.teacherId)
+        ? new Types.ObjectId(u.teacherId)
+        : base.teacherId;
 
       const setFields: Record<string, any> = {};
       if (u.title !== undefined) setFields.title = u.title;
@@ -794,26 +884,22 @@ export const LessonService = {
       if (u.order !== undefined) setFields.order = u.order;
       if (u.vocabulary !== undefined) setFields.vocabulary = u.vocabulary;
       if (u.status !== undefined) setFields.status = u.status;
+      if (u.teacherId) setFields.teacherId = targetTeacherId; // 🔧 FIX
 
       const entry: any = {
-        lessonId: _id,
+        lessonId,
         index: updIndex,
-        original: u,
+        teacherId: targetTeacherId,
         setFields
       };
 
       if (u.schedule) {
-        // fetch base to merge existing schedule values
-        const base = await Lesson.findOne({ _id, courseId })
-          .select({ schedule: 1, startAt: 1, endAt: 1 })
-          .lean();
         const merged = {
-          date: u.schedule.date ?? base?.schedule?.date,
-          time: u.schedule.time ?? base?.schedule?.time,
-          duration: u.schedule.duration ?? base?.schedule?.duration
-        } as any;
+          date: u.schedule.date ?? base.schedule?.date,
+          time: u.schedule.time ?? base.schedule?.time,
+          duration: u.schedule.duration ?? base.schedule?.duration
+        };
 
-        // validate/normalize time if present
         if (merged.time) {
           const nt = normalizeToHHMM24(merged.time);
           if (!nt) {
@@ -827,103 +913,85 @@ export const LessonService = {
           merged.time = nt;
         }
 
-        // compute start/end instants
         const { startAt, endAt } = await parseStartEnd(
           { date: merged.date, time: merged.time, duration: merged.duration },
           undefined,
           undefined,
           timeZone
         );
-        const startUtc = new Date(startAt.toISOString());
-        const endUtc = new Date(endAt.toISOString());
 
         entry.mergedSchedule = merged;
-        entry.startAtUtc = startUtc;
-        entry.endAtUtc = endUtc;
-        entry.setFields = { ...setFields, schedule: merged, startAt: startUtc, endAt: endUtc };
+        entry.startAtUtc = new Date(startAt.toISOString());
+        entry.endAtUtc = new Date(endAt.toISOString());
+        entry.setFields = {
+          ...setFields,
+          schedule: merged,
+          startAt: entry.startAtUtc,
+          endAt: entry.endAtUtc
+        };
       }
 
       parsedUpdates.push(entry);
       updIndex++;
     }
 
-    // 2) DB-level overlap detection:
-    // Build a single query that checks the incoming intervals against DB lessons, **excluding all lessons
-    // that are present in this same update payload** (they'll be moved by this request).
-    if (parsedUpdates.length > 0) {
-      // collect only updates that have start/end computed
-      const intervals = parsedUpdates
-        .filter(p => p.startAtUtc && p.endAtUtc)
-        .map(p => ({ start: p.startAtUtc!, end: p.endAtUtc!, id: p.lessonId }));
+    // 2) Overlap detection (PER TARGET TEACHER) 🔧 FIX
+    for (const p of parsedUpdates) {
+      if (!p.startAtUtc || !p.endAtUtc) continue;
 
-      if (intervals.length > 0) {
-        // ids being updated - exclude them from DB clash check
-        const updatedIds = intervals.map(i => i.id);
+      const clash = await Lesson.findOne({
+        teacherId: p.teacherId,
+        status: { $ne: 'archived' },
+        _id: { $ne: p.lessonId },
+        startAt: { $lt: p.endAtUtc },
+        endAt: { $gt: p.startAtUtc }
+      })
+        .select('_id title startAt endAt')
+        .lean();
 
-        // Build OR clauses comparing each incoming interval against any existing lesson (teacher-scope).
-        // Note: keep the scope to the teacher (we want to prevent teacher double-booking).
-        const orClauses = intervals.map(i => ({
-          startAt: { $lt: i.end },
-          endAt: { $gt: i.start }
-        }));
-
-        // Single DB query: teacher + active status + exclude updatedIds + any overlap
-        const existingClash = await Lesson.findOne({
-          teacherId,
-          status: { $ne: 'archived' },
-          _id: { $nin: updatedIds },
-          $or: orClauses
-        })
-          .select({ _id: 1, title: 1, startAt: 1, endAt: 1 })
-          .lean();
-
-        if (existingClash) {
-          const e: any = new Error('Lesson time overlaps with an existing lesson');
-          e.code = '409_CONFLICT_OVERLAP';
-          e.meta = { clash: existingClash };
-          throw e;
-        }
+      if (clash) {
+        const e: any = new Error('Lesson time overlaps with an existing lesson');
+        e.code = '409_CONFLICT_OVERLAP';
+        e.meta = { clash };
+        throw e;
       }
     }
 
-    // 3) Intra-payload overlap detection among parsedUpdates (ignore items without schedule changes)
-    const toCheck = parsedUpdates
-      .filter(p => p.startAtUtc && p.endAtUtc)
-      .map(p => ({
-        id: p.lessonId.toString(),
-        start: p.startAtUtc!,
-        end: p.endAtUtc!,
-        idx: p.index
-      }));
-    if (toCheck.length > 1) {
-      toCheck.sort((a, b) => a.start.getTime() - b.start.getTime());
-      for (let i = 0; i < toCheck.length - 1; i++) {
-        const a = toCheck[i];
-        const b = toCheck[i + 1];
-        if (a.end.getTime() > b.start.getTime()) {
+    // 3) Intra-payload overlap (same teacher only)
+    const groupedByTeacher = new Map<string, any[]>();
+    for (const p of parsedUpdates) {
+      if (!p.startAtUtc || !p.endAtUtc) continue;
+      const key = String(p.teacherId);
+      groupedByTeacher.set(key, [...(groupedByTeacher.get(key) || []), p]);
+    }
+
+    for (const [, list] of groupedByTeacher) {
+      list.sort((a, b) => a.startAtUtc.getTime() - b.startAtUtc.getTime());
+      for (let i = 0; i < list.length - 1; i++) {
+        if (list[i].endAtUtc.getTime() > list[i + 1].startAtUtc.getTime()) {
           const e: any = new Error('Incoming updates overlap with each other');
           e.code = '409_CONFLICT_OVERLAP';
-          e.meta = {
-            conflictBetween: [a.idx, b.idx],
-            a: { start: a.start.toISOString(), end: a.end.toISOString() },
-            b: { start: b.start.toISOString(), end: b.end.toISOString() }
-          };
           throw e;
         }
       }
     }
 
-    // 4) Build ops for updates (include schedule/startAt/endAt where present)
+    // 4) Build DB ops
     for (const p of parsedUpdates) {
       if (Object.keys(p.setFields || {}).length) {
         ops.push({
-          updateOne: { filter: { _id: p.lessonId, courseId }, update: { $set: p.setFields } }
+          updateOne: {
+            filter: { _id: p.lessonId, courseId },
+            update: { $set: p.setFields }
+          }
         });
+
         if (p.startAtUtc && p.endAtUtc) {
           sessionsToUpdate.push({
             lessonId: p.lessonId.toString(),
             startAt: p.startAtUtc,
-            endAt: p.endAtUtc
+            endAt: p.endAtUtc,
+            teacherId: p.teacherId.toString()
           });
         }
       }
@@ -938,6 +1006,14 @@ export const LessonService = {
     await Lesson.bulkWrite(ops, { ordered: false });
     await recomputeCourseTrialAvailability(courseId);
 
+    // 🔧 FIX: recompute course.teachers[]
+    const activeTeacherIds = await Lesson.distinct('teacherId', {
+      courseId,
+      status: { $ne: 'archived' }
+    });
+
+    await Course.updateOne({ _id: courseId }, { $set: { teachers: activeTeacherIds } });
+
     const refreshed = await Lesson.find({ courseId }).sort({ order: 1 }).lean();
 
     const enrolledStudents = await BookingModel.find({
@@ -947,29 +1023,28 @@ export const LessonService = {
       .select('student')
       .lean();
 
-    const studentIds = enrolledStudents.map((booking: any) => booking.student.toString());
+    const studentIds = enrolledStudents.map((b: any) => b.student.toString());
 
-    if (sessionsToUpdate.length > 0) {
-      await Promise.all(
-        sessionsToUpdate.map(async ({ lessonId, startAt, endAt }) => {
-          try {
-            await sessionService.updateSessionForLesson({
-              lessonId,
-              courseId: courseId.toString(),
-              teacherId: teacherId.toString(),
-              start: startAt,
-              end: endAt,
-              students: studentIds
-            });
-          } catch (error: any) {
-            Logger.error(`Failed to update session for lesson ${lessonId}:`, error);
-          }
-        })
-      );
-    }
+    // 5) Update sessions with correct teacher 🔧 FIX
+    await Promise.all(
+      sessionsToUpdate.map(async s => {
+        try {
+          await sessionService.updateSessionForLesson({
+            lessonId: s.lessonId,
+            courseId: courseId.toString(),
+            teacherId: s.teacherId,
+            start: s.startAt,
+            end: s.endAt,
+            students: studentIds
+          });
+        } catch (err) {
+          Logger.error(`Failed to update session ${s.lessonId}`, err);
+        }
+      })
+    );
+
     return { items: refreshed, count: refreshed.length };
   },
-
   getLessons: async (query: GetLessonsQuery) => {
     const {
       teacherId,
@@ -1226,7 +1301,7 @@ export const LessonService = {
 
     if (courseId) filters.course = new Types.ObjectId(courseId);
 
-    if (view === LessonViewType.UPCOMING) filters.start = { $gte: now };
+    if (view === LessonViewType.UPCOMING) filters.end = { $gte: now };
     else filters.end = { $lt: now };
 
     const totalItems = await SessionModel.countDocuments(filters);
@@ -1348,6 +1423,359 @@ export const LessonService = {
 
       return lessonItem;
     });
+
+    return {
+      lessons,
+      pagination: {
+        currentPage: page,
+        totalPages: Math.ceil(totalItems / limit),
+        totalItems,
+        itemsPerPage: limit
+      },
+      view
+    };
+  },
+
+  async getUpcomingLessons(args: {
+    userId: string;
+    role: string;
+    timeZone: string;
+    limit: number;
+    days: number;
+    courseId?: string;
+  }) {
+    const { userId, role, timeZone, limit, days, courseId } = args;
+    const r = String(role || '').toLowerCase();
+
+    // 1) Build window in USER TZ, then convert to UTC for DB
+    const nowLocal = DateTime.now().setZone(timeZone);
+
+    const nowUtc = nowLocal.toUTC(); // instant now (UTC)
+    const windowEndUtc = nowLocal.plus({ days }).endOf('day').toUTC(); // end-of-day in user TZ -> UTC
+
+    const now = nowUtc.toJSDate();
+    const windowEnd = windowEndUtc.toJSDate();
+
+    // 2) Upcoming definition (as per your requirement):
+    // Keep session in upcoming UNTIL its end time.
+    // - end >= now (ongoing + future)
+    // - start < windowEnd (within next N days window)
+    const sessionFilter: any = {
+      end: { $gte: now },
+      start: { $lt: windowEnd },
+      status: { $ne: SessionStatus.CANCELLED }
+    };
+
+    // 3) Active course constraint
+    // We will compute allowedCourseIds (ACTIVE only), and apply to sessionFilter.course.
+    // Additionally, we add populate.match as a defensive guarantee.
+
+    let allowedCourseIds: Types.ObjectId[] = [];
+
+    if (r === 'teacher') {
+      // Teacher can have:
+      // - ownerType: 'teacher' + ownerId == teacher
+      // - OR teacher listed in Course.teachers
+      const courseQ: any = {
+        status: 'active',
+        ...(courseId ? { _id: new Types.ObjectId(courseId) } : {}),
+        $or: [
+          { ownerType: 'teacher', ownerId: new Types.ObjectId(userId) },
+          { teachers: new Types.ObjectId(userId) }
+        ]
+      };
+
+      const activeTeacherCourses = await Course.find(courseQ).select('_id').lean();
+      allowedCourseIds = activeTeacherCourses.map((c: any) => c._id);
+
+      // If teacher has no active courses, return []
+      if (allowedCourseIds.length === 0) return [];
+
+      sessionFilter.teacher = new Types.ObjectId(userId);
+      sessionFilter.course = { $in: allowedCourseIds };
+    } else if (r === 'school') {
+      const courseQ: any = {
+        ownerType: 'school',
+        ownerId: new Types.ObjectId(userId),
+        status: 'active', // only active courses
+        ...(courseId ? { _id: new Types.ObjectId(courseId) } : {})
+      };
+
+      const activeSchoolCourses = await Course.find(courseQ).select('_id').lean();
+      allowedCourseIds = activeSchoolCourses.map((c: any) => c._id);
+
+      if (allowedCourseIds.length === 0) return [];
+
+      sessionFilter.course = { $in: allowedCourseIds };
+    } else {
+      return [];
+    }
+
+    // 4) Query
+    // Sort typing: use explicit SortOrder spec to avoid TS error
+    const sort: Record<string, SortOrder> = { start: 1, _id: 1 };
+
+    const sessions = await SessionModel.find(sessionFilter)
+      .populate({
+        path: 'lesson',
+        select:
+          'title _id schedule status description isTrialAvailable teacherId startAt endAt address',
+        populate: {
+          path: 'teacherId',
+          select: 'name _id',
+          populate: { path: 'profileImage', select: 'url' }
+        }
+      })
+      .populate({
+        path: 'course',
+        match: { status: 'active' }, // defensive: ensures inactive courses populate to null
+        select: 'title _id mode description lessonType address introImageRef status',
+        populate: { path: 'introImageRef', select: 'url' }
+      })
+      .populate({
+        path: 'teacher',
+        select: 'name _id',
+        populate: { path: 'profileImage', select: 'url' }
+      })
+      .populate({
+        path: 'students',
+        select: 'name _id profile.age profile.grade',
+        populate: { path: 'profileImage', select: 'url' }
+      })
+      .select('joinUrl status start end course lesson teacher students createdAt')
+      .sort(sort)
+      .limit(Math.min(Math.max(limit, 1), 50)) // sensible cap
+      .lean();
+
+    // 5) Remove any sessions whose course got nulled by populate.match (defensive)
+    const filtered = sessions.filter((s: any) => !!s.course);
+
+    return filtered;
+  },
+
+  async getSchoolLessons(args: {
+    schoolId: string;
+    courseId?: string;
+    view: LessonViewType;
+    page: number;
+    limit: number;
+    studentName?: string;
+    status?: string; // optional session status
+  }) {
+    const { schoolId, courseId, view, page, limit, studentName, status } = args;
+
+    const now = new Date();
+    const skip = (page - 1) * limit;
+
+    // 1) Resolve ACTIVE school-owned courses only
+    const courseFilter: any = {
+      ownerType: 'school',
+      ownerId: new Types.ObjectId(schoolId),
+      status: 'active' // only active courses
+    };
+    if (courseId) courseFilter._id = new Types.ObjectId(courseId);
+
+    const courses = await Course.find(courseFilter).select('_id').lean();
+    const courseIds = courses.map((c: any) => c._id);
+
+    if (courseIds.length === 0) {
+      return {
+        lessons: [],
+        pagination: { currentPage: page, totalPages: 0, totalItems: 0, itemsPerPage: limit },
+        view
+      };
+    }
+
+    // 2) Session filters
+    const filters: any = {
+      course: { $in: courseIds },
+      status: { $ne: SessionStatus.CANCELLED }
+    };
+
+    // IMPORTANT REQUIREMENT you mentioned earlier:
+    // upcoming should include until lesson END time (not just start)
+    if (view === LessonViewType.UPCOMING) {
+      filters.end = { $gte: now }; // ✅ session stays "upcoming" until it ends
+    } else {
+      filters.end = { $lt: now };
+    }
+
+    if (status && status !== 'all') {
+      // if you use SessionStatus enum strings, validate upstream; keeping permissive
+      filters.status = status;
+    }
+
+    // 3) Query sessions
+    const baseQuery = SessionModel.find(filters)
+      .populate({
+        path: 'course',
+        // optional defensive filter (keeps course null if not active)
+        match: { status: 'active' },
+        select: 'title lessonType mode address status',
+        populate: { path: 'introImageRef', select: 'url' }
+      })
+      .populate('lesson', 'title isTrialAvailable schedule description')
+      .populate({
+        path: 'teacher',
+        select: 'name',
+        populate: { path: 'profileImage', select: 'url' }
+      })
+      .populate({
+        path: 'students',
+        select: 'name profile.age',
+        populate: { path: 'profileImage', select: 'url' }
+      });
+
+    // NOTE: If studentName is provided, we do a lightweight post-filter.
+    // For strict DB-side filtering at scale, switch to Aggregation Version B.
+    type SortSpec = Record<string, SortOrder>;
+
+    function getSessionSort(v: LessonViewType): SortSpec {
+      if (v === LessonViewType.UPCOMING) return { start: 1, _id: 1 };
+      if (v === LessonViewType.HISTORY) return { start: -1, _id: 1 };
+      return { start: 1, _id: 1 };
+    }
+
+    const sort = getSessionSort(view);
+    // inferred => { start: number }
+
+    const [totalItemsRaw, sessionsRaw] = await Promise.all([
+      SessionModel.countDocuments(filters),
+      baseQuery.sort(sort).skip(skip).limit(limit).lean()
+    ]);
+
+    // remove sessions whose course got nulled by populate.match (defensive)
+    let sessions = (sessionsRaw as any[]).filter(s => !!s.course);
+
+    // studentName filter (post filter)
+    if (studentName) {
+      const q = studentName.trim().toLowerCase();
+      sessions = sessions.filter((s: any) =>
+        (s.students || []).some((st: any) =>
+          String(st?.name || '')
+            .toLowerCase()
+            .includes(q)
+        )
+      );
+      // totalItemsRaw becomes approximate; for perfect totals, use aggregation.
+    }
+
+    // 4) booking.address mapping for in-person 1-on-1
+    const oneOnOneInPersonCourseIds = Array.from(
+      new Set(
+        sessions
+          .filter((s: any) => s?.course?.mode === 'in-person' && s?.course?.lessonType === '1-on-1')
+          .map((s: any) => String(s.course?._id))
+          .filter(Boolean)
+      )
+    );
+
+    const bookingAddressByCourseId = new Map<string, any>();
+    if (oneOnOneInPersonCourseIds.length > 0) {
+      const bookings = await BookingModel.find({
+        course: { $in: oneOnOneInPersonCourseIds.map(id => new Types.ObjectId(id)) },
+        paymentStatus: { $in: ['PAID', 'NOT_REQUIRED'] }
+      })
+        .select('course address updatedAt createdAt')
+        .sort({ updatedAt: -1, createdAt: -1 })
+        .lean();
+
+      for (const b of bookings) {
+        const cId = String(b.course);
+        if (!bookingAddressByCourseId.has(cId) && b.address) {
+          bookingAddressByCourseId.set(cId, b.address);
+        }
+      }
+    }
+
+    // 5) Ratings
+    const teacherIds = sessions.map((s: any) => s?.teacher?._id).filter(Boolean);
+
+    const ratings = await FeedbackRating.aggregate([
+      { $match: { teacher: { $in: teacherIds } } },
+      {
+        $group: {
+          _id: '$teacher',
+          averageRating: { $avg: '$rating' },
+          totalRatings: { $count: {} }
+        }
+      }
+    ]);
+
+    const ratingsMap = new Map(
+      ratings.map((r: any) => [
+        String(r._id),
+        { averageRating: r.averageRating, totalRatings: r.totalRatings }
+      ])
+    );
+
+    // 6) Response mapping (LessonCard compatible)
+    const lessons = sessions.map((session: any) => {
+      const duration = Math.round(
+        (new Date(session.end).getTime() - new Date(session.start).getTime()) / 60000
+      );
+
+      const lessonType = session.course?.lessonType || '1-on-1';
+      const courseMode = session.course?.mode || 'online';
+
+      let address: any = null;
+      if (courseMode === 'in-person') {
+        if (lessonType === 'group') address = session.course?.address || null;
+        else {
+          address =
+            bookingAddressByCourseId.get(String(session.course?._id)) ||
+            session.course?.address ||
+            null;
+        }
+      }
+
+      const teacherRating = ratingsMap.get(String(session.teacher?._id)) || {
+        averageRating: 0,
+        totalRatings: 0
+      };
+
+      return {
+        sessionId: String(session._id),
+        lessonTitle: session.lesson?.title || 'Untitled Lesson',
+        courseTitle: session.course?.title || 'Untitled Course',
+
+        teacher: {
+          _id: String(session.teacher?._id),
+          name: session.teacher?.name || 'Teacher',
+          profileImage: session.teacher?.profileImage,
+          rating: teacherRating
+        },
+
+        // school may want first student info for UI (optional but useful)
+        student:
+          Array.isArray(session.students) && session.students[0]
+            ? {
+                _id: String(session.students[0]._id),
+                name: session.students[0].name,
+                profileImage: session.students[0]?.profileImage,
+                age: session.students[0]?.profile?.age ?? null
+              }
+            : null,
+
+        startTime: session.start,
+        endTime: session.end,
+        duration,
+        status: session.status,
+
+        lessonType,
+        courseMode,
+
+        isTrialLesson: !!session.lesson?.isTrialAvailable,
+        description: session.lesson?.description || '',
+        address,
+
+        // joinUrl availability for UI
+        meetingUrl: courseMode === 'online' ? session.joinUrl : undefined
+      };
+    });
+
+    // For perfect totals with post-filter, you can compute:
+    const totalItems = studentName ? lessons.length : totalItemsRaw;
 
     return {
       lessons,

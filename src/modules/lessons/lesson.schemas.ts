@@ -113,7 +113,12 @@ export const lessonCreateItemSchema = z.object({
   status: z.enum(['draft', 'active', 'archived']).optional().default('draft'),
   order: z.coerce.number().int().min(0).optional(),
   // (Optional) vocab or tags if UI uses them
-  vocabulary: z.array(z.string()).optional()
+  vocabulary: z.array(z.string()).optional(),
+  // REQUIRED FOR SCHOOL FLOW
+  teacherId: z
+    .string()
+    .regex(/^[0-9a-fA-F]{24}$/, 'Invalid teacherId')
+    .optional()
 });
 
 export const lessonUpdateItemSchema = z.object({
@@ -125,7 +130,12 @@ export const lessonUpdateItemSchema = z.object({
   trialCapacity: z.coerce.number().int().min(0).optional(),
   order: z.coerce.number().int().min(0).optional(),
   vocabulary: z.array(z.string()).optional(),
-  status: z.enum(['draft', 'active', 'archived']).optional()
+  status: z.enum(['draft', 'active', 'archived']).optional(),
+  // REQUIRED FOR SCHOOL FLOW
+  teacherId: z
+    .string()
+    .regex(/^[0-9a-fA-F]{24}$/, 'Invalid teacherId')
+    .optional()
 });
 
 export const bulkCreateLessonsSchema = z.object({

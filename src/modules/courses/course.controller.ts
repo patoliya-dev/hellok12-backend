@@ -5,6 +5,7 @@ import { CourseService } from './course.service';
 import { USER_ROLES } from '../../utils/constants';
 import { ValidatedRequest } from '../../middlewares/validation';
 import { normalizeTimezone } from '../lessons/lesson.util';
+import { AuthenticatedRequest } from '../../middlewares/auth';
 
 export const createCourse = async (req: ValidatedRequest, res: Response) => {
   const parsed = courseCreateSchema.safeParse(req.body);
@@ -151,5 +152,33 @@ export const courseFeedbacks = async (req: Request, res: Response) => {
     return res.json(createSuccessResponse(data, 'Course feedbacks fetched successfully', 200));
   } catch (error: any) {
     return res.status(500).json(createErrorResponse(error.message, 'Error', 500));
+  }
+};
+
+export const getSchoolCourses = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const schoolId = req.user?.id;
+    if (!schoolId) {
+      return res.status(401).json(createErrorResponse('Unauthorized', 'Unauthorized', 401));
+    }
+
+    const status = (req.query.status as string) || 'active';
+
+    // Optional: allow only supported values
+    const allowed = new Set(['active', 'draft', 'archived', 'all']);
+    const normalized = allowed.has(status) ? status : 'active';
+
+    const courses = await CourseService.listCoursesForSchool({
+      schoolId,
+      status: normalized === 'all' ? undefined : (normalized as any)
+    });
+
+    return res
+      .status(200)
+      .json(createSuccessResponse({ courses }, 'School courses fetched successfully', 200));
+  } catch (e: any) {
+    return res
+      .status(500)
+      .json(createErrorResponse(e?.message || 'Failed to fetch school courses', 'Error', 500));
   }
 };

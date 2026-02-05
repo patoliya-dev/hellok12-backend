@@ -16,7 +16,7 @@ export const getCourseDetails = (id: string) => {
       from: 'users',
       localField: 'teachers',
       foreignField: '_id',
-      pipeline: [{ $project: { _id: 1, name: 1 } }],
+      pipeline: [{ $project: { _id: 1, name: 1, school: 1 } }],
       as: 'teachers'
     }
   });

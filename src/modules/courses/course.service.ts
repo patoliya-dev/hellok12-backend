@@ -146,6 +146,7 @@ export const CourseService = {
       title: `${src.title} (Copy)`,
       status: 'draft',
       isTrialAvailable: false,
+      enrolledCount: 0,
       createdAt: undefined,
       updatedAt: undefined
     });

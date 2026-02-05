@@ -3,6 +3,8 @@ import mongoose, { Schema, Document, Types } from 'mongoose';
 export interface ITransaction extends Document {
   payer?: Types.ObjectId | string | null;
   payee?: Types.ObjectId | string | null;
+  school?: Types.ObjectId | string | null;
+  payeeType?: 'teacher' | 'school';
   booking?: Types.ObjectId | string | null;
   amount?: number; // cents
   amountDisplay?: string; // human friendly e.g. "$65.00"
@@ -29,6 +31,8 @@ export interface ITransaction extends Document {
 const TransactionSchema = new Schema<ITransaction>({
   payer: { type: Schema.Types.ObjectId, ref: 'User' },
   payee: { type: Schema.Types.ObjectId, ref: 'User' }, // teacher or school
+  school: { type: Schema.Types.ObjectId, ref: 'User', index: true },
+  payeeType: { type: String, enum: ['teacher', 'school'], index: true },
   booking: { type: Schema.Types.ObjectId, ref: 'Booking' },
   amount: { type: Number }, // cents
   amountDisplay: { type: String },
@@ -58,5 +62,6 @@ const TransactionSchema = new Schema<ITransaction>({
 
 TransactionSchema.index({ payee: 1, status: 1, createdAt: -1 });
 TransactionSchema.index({ booking: 1, status: 1 });
+TransactionSchema.index({ school: 1, status: 1, createdAt: -1 });
 
 export default mongoose.model<ITransaction>('Transaction', TransactionSchema);

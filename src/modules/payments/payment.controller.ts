@@ -107,12 +107,15 @@ export async function setDefaultPaymentMethod(req: Request, res: Response, next:
 export async function createPaymentIntent(req: Request, res: Response, next: NextFunction) {
   try {
     const userId = (req as any).user?.id;
+    if (!userId) return res.status(401).json({ success: false, message: 'Unauthorized' });
+
     const incoming =
       (req as any).body && (req as any).body.body
         ? (req as any).body.body
         : (req as any).body || {};
+
     const bodySchema = z.object({
-      amount: z.number(),
+      amount: z.number().positive(),
       currency: z.string().optional().default('usd'),
       bookingId: z.string().optional(),
       teacherId: z.string().optional(),
@@ -122,11 +125,13 @@ export async function createPaymentIntent(req: Request, res: Response, next: Nex
       payoutReceiverId: z.string().optional(),
       paymentMethodId: z.string().optional(),
       savePaymentMethod: z.boolean().optional().default(false),
-      idempotencyKey: z.string().optional(),
+      idempotencyKey: z.string(),
       metadata: z.record(z.string(), z.string()).optional()
     });
+
     const payload = bodySchema.parse(incoming);
-    const pi: any = await stripeService.createPaymentIntent({
+
+    const result = await stripeService.createPaymentIntent({
       userId,
       amount: payload.amount,
       currency: payload.currency,
@@ -142,20 +147,32 @@ export async function createPaymentIntent(req: Request, res: Response, next: Nex
       courseTitle: payload.courseTitle
     });
 
-    // Attempt to find server-side Transaction created at PI creation time
-    let transactionId = null;
-    try {
-      const tx = await TransactionModel.findOne({ stripePaymentIntentId: pi.id }).lean();
-      if (tx) transactionId = tx._id;
-    } catch (err) {
-      // ignore - this is optional for the client
-      console.warn('Could not locate transaction for paymentIntent', err);
+    // Option A guarantee: client_secret MUST exist
+    if (!result.client_secret || !result.paymentIntentId) {
+      throw new Error(
+        `PaymentIntent creation failed: missing client_secret or paymentIntentId (invoiceId=${result.invoiceId})`
+      );
     }
 
-    res.json({
+    // Resolve transactionId (invoice-first = safest)
+    let transactionId: string | null = null;
+    try {
+      const tx = await TransactionModel.findOne({
+        'metadata.idempotencyKey': payload.idempotencyKey
+      })
+        .select({ _id: 1 })
+        .lean();
+      if (tx) transactionId = String(tx._id);
+    } catch {
+      // non-fatal
+    }
+
+    return res.json({
       success: true,
-      client_secret: pi.client_secret,
-      paymentIntentId: pi.id,
+      client_secret: result.client_secret,
+      paymentIntentId: result.paymentIntentId,
+      invoiceId: result.invoiceId,
+      hosted_invoice_url: result.hosted_invoice_url,
       transactionId
     });
   } catch (err) {
@@ -167,8 +184,20 @@ export async function refund(req: Request, res: Response, next: NextFunction) {
   try {
     const { transactionId, amount } = req.body;
     if (!transactionId)
-      return res.status(400).send({ success: false, message: 'transactionId required' });
-    const refund = await stripeService.createRefund(transactionId, amount);
+      return res.status(400).json({ success: false, message: 'transactionId required' });
+
+    const tx = await TransactionModel.findById(transactionId)
+      .select({ stripePaymentIntentId: 1 })
+      .lean();
+
+    if (!tx?.stripePaymentIntentId) {
+      return res.status(400).json({
+        success: false,
+        message: 'No payment intent associated with this transaction'
+      });
+    }
+
+    const refund = await stripeService.createRefund(tx.stripePaymentIntentId, amount);
     res.json({ success: true, refund });
   } catch (err) {
     next(err);

@@ -57,7 +57,7 @@ r.get(
   '/getLessonsForStudent/:studentId',
   authenticate,
   authorize([USER_ROLES.STUDENT, USER_ROLES.PARENT, USER_ROLES.SCHOOL]),
-  ctrl.getLessonsForStudent
+  ctrl.getUpcomingLessonsForStudent
 );
 
 r.get(

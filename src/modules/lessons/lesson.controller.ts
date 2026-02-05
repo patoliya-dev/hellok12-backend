@@ -17,6 +17,7 @@ import bookingModel from '../../models/booking.model';
 import { CoursesListResponse, LessonListResponse, LessonViewType } from '../../types/LessonTypes';
 import { normalizeTimezone } from './lesson.util';
 import { recomputeCourseTeachers } from '../courses/course.helper';
+import { User } from '../../models/user.model';
 
 export const createLesson = async (req: Request, res: Response) => {
   const parsed = lessonCreateSchema.safeParse(req.body);
@@ -419,6 +420,7 @@ export async function getSessionsByDate(req: Request, res: Response) {
 export const getLessonStats = async (req: Request, res: Response) => {
   try {
     const teacherId = req.user?.id;
+    const role = req.user?.role;
 
     if (!teacherId) {
       return res.status(401).json({
@@ -428,32 +430,26 @@ export const getLessonStats = async (req: Request, res: Response) => {
     }
 
     const [pending, completed, cancelled] = await Promise.all([
-      LessonService.getLessons({
-        teacherId,
-        status: SessionStatus.SCHEDULED,
-        page: 1,
-        limit: 1
-      }),
-      LessonService.getLessons({
-        teacherId,
-        status: SessionStatus.COMPLETED,
-        page: 1,
-        limit: 1
-      }),
-      LessonService.getLessons({
-        teacherId,
-        status: SessionStatus.CANCELLED,
-        page: 1,
-        limit: 1
-      })
+      LessonService.getLessons(
+        { teacherId, status: SessionStatus.SCHEDULED, page: 1, limit: 1 },
+        role
+      ),
+      LessonService.getLessons(
+        { teacherId, status: SessionStatus.COMPLETED, page: 1, limit: 1 },
+        role
+      ),
+      LessonService.getLessons(
+        { teacherId, status: SessionStatus.CANCELLED, page: 1, limit: 1 },
+        role
+      )
     ]);
 
     return res.status(200).json({
       success: true,
       data: {
-        pending: pending.pagination.total,
-        completed: completed.pagination.total,
-        cancelled: cancelled.pagination.total
+        pending: pending?.pagination?.total ?? 0,
+        completed: completed?.pagination?.total ?? 0,
+        cancelled: cancelled?.pagination?.total ?? 0
       }
     });
   } catch (error) {
@@ -466,7 +462,7 @@ export const getLessonStats = async (req: Request, res: Response) => {
 export const getLessons = async (req: Request, res: Response) => {
   try {
     const teacherId = req.user?.id;
-
+    const role = req.user?.role;
     const {
       startDate,
       endDate,
@@ -520,7 +516,7 @@ export const getLessons = async (req: Request, res: Response) => {
       query.limit = 10;
     }
 
-    const result = await LessonService.getLessons(query as any);
+    const result = await LessonService.getLessons(query as any, role);
 
     return res.status(200).json({
       success: true,
@@ -533,30 +529,87 @@ export const getLessons = async (req: Request, res: Response) => {
   }
 };
 
-export const getLessonsForStudent = async (req: Request, res: Response) => {
+async function assertStudentAccess(req: any, studentId: string) {
+  const role = req.user?.role;
+  const requesterId = req.user?.id;
+
+  if (!Types.ObjectId.isValid(studentId)) {
+    const e: any = new Error('Invalid studentId');
+    e.statusCode = 400;
+    throw e;
+  }
+
+  // STUDENT: can only access self
+  if (role === 'student') {
+    if (String(requesterId) !== String(studentId)) {
+      const e: any = new Error('Forbidden');
+      e.statusCode = 403;
+      throw e;
+    }
+    return;
+  }
+
+  // PARENT: ensure this student belongs to this parent (adjust field names to your schema)
+  if (role === 'parent') {
+    const student = await User.findById(studentId).select({ parent: 1, parents: 1 }).lean();
+    const ok =
+      String((student as any)?.parent || '') === String(requesterId) ||
+      ((student as any)?.parents || []).some((p: any) => String(p) === String(requesterId));
+
+    if (!ok) {
+      const e: any = new Error('Forbidden');
+      e.statusCode = 403;
+      throw e;
+    }
+    return;
+  }
+
+  // SCHOOL: ensure student is part of school (via student.school OR booking.course owner etc.)
+  if (role === 'school') {
+    // simplest: student has school field
+    const student = await User.findById(studentId).select({ school: 1 }).lean();
+    if (String((student as any)?.school || '') !== String(requesterId)) {
+      const e: any = new Error('Forbidden');
+      e.statusCode = 403;
+      throw e;
+    }
+    return;
+  }
+}
+
+export const getUpcomingLessonsForStudent = async (req: Request, res: Response) => {
   try {
     const { studentId } = req.params;
 
     if (!studentId) {
-      return res.status(401).json({
-        success: false,
-        message: 'Unauthorized: Student ID not found'
-      });
+      return res
+        .status(401)
+        .json({ success: false, message: 'Unauthorized: Student ID not found' });
     }
 
-    const rawTz = req.userTimezone || 'UTC';
-    const timezone = normalizeTimezone(rawTz);
+    // Security: enforce access rules
+    await assertStudentAccess(req as any, studentId);
 
-    const lessons = await LessonService.getLessonsForStudent(studentId, timezone);
+    const rawTz = (req as any).userTimezone || 'UTC';
+    const timeZone = normalizeTimezone(rawTz);
 
-    return res.status(200).json({
-      success: true,
-      data: lessons
+    const days = Math.min(Math.max(parseInt(String(req.query.days || '30'), 10), 1), 90);
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit || '20'), 10), 1), 50);
+    const page = Math.max(parseInt(String(req.query.page || '1'), 10), 1);
+
+    const lessons = await LessonService.getUpcomingLessonsForStudent(studentId, timeZone, {
+      days,
+      limit,
+      page
     });
+
+    return res.status(200).json({ success: true, data: lessons });
   } catch (error) {
     return res
       .status(500)
-      .json(createErrorResponse('Error in getLessonsForStudent', 'Internal Server Error', 500));
+      .json(
+        createErrorResponse('Error in getUpcomingLessonsForStudent', 'Internal Server Error', 500)
+      );
   }
 };
 

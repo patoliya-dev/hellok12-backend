@@ -3,7 +3,7 @@ import { FilterQuery, SortOrder, Types } from 'mongoose';
 import { Lesson, LessonDoc } from '../../models/lesson.model';
 import { Course } from '../../models/course.model';
 import { LessonItemInput } from './lesson.schemas';
-import { getDayRangeFromISO, normalizeToHHMM24, parseStartEnd } from './lesson.util';
+import { normalizeTimezone, normalizeToHHMM24, parseStartEnd } from './lesson.util';
 import { SessionModel, SessionStatus } from '../../models/sessions.model';
 import {
   addPaginationToPipeline,
@@ -126,6 +126,23 @@ type CalendarArgs = {
   year: number;
   timeZone: string;
   teacherId?: string; // school filter
+};
+
+type UpcomingOpts = {
+  days: number;
+  limit: number;
+  page: number;
+};
+
+export type GetLessonsResult = {
+  lessons: any[];
+  pagination: {
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  };
+  pendingCount: number;
 };
 
 export const LessonService = {
@@ -1045,7 +1062,7 @@ export const LessonService = {
 
     return { items: refreshed, count: refreshed.length };
   },
-  getLessons: async (query: GetLessonsQuery) => {
+  getLessons: async (query: GetLessonsQuery, role?: string): Promise<GetLessonsResult> => {
     const {
       teacherId,
       startDate,
@@ -1080,85 +1097,111 @@ export const LessonService = {
     const pendingCount = await getPendingCount(teacherId);
 
     // Transform data
-    const lessons = sessions.map(session => transformSessionToLesson(session));
+    const lessons = (sessions || []).map(session => transformSessionToLesson(session, role));
 
     return {
       lessons,
       pagination: {
-        total,
+        total: total || 0,
         page,
         limit,
-        totalPages: Math.ceil(total / limit)
+        totalPages: Math.ceil((total || 0) / limit)
       },
-      pendingCount
+      pendingCount: pendingCount || 0
     };
   },
-  async getLessonsForStudent(studentId: string, timeZone: string) {
-    const { start, end } = getDayRangeFromISO(undefined, timeZone);
+  getUpcomingLessonsForStudent: async (studentId: string, timeZone: string, opts: UpcomingOpts) => {
+    const tz = normalizeTimezone(timeZone);
 
-    const lessons: any = await SessionModel.find({
-      students: { $in: studentId },
-      start: { $gte: start, $lt: end }
+    const studentObjId = new Types.ObjectId(studentId);
+
+    const nowUtc = DateTime.now().setZone(tz).toUTC(); // "now" in student's timezone, converted to UTC instant
+    const endUtc = nowUtc.plus({ days: opts.days });
+
+    const skip = (opts.page - 1) * opts.limit;
+
+    // Correct upcoming query: start >= now
+    // Correct students filter: $in [ObjectId]
+    const sessions = await SessionModel.find({
+      students: { $in: [studentObjId] },
+      start: { $gte: nowUtc.toJSDate(), $lt: endUtc.toJSDate() },
+      // Optional: only upcoming-like statuses (if your schema uses them)
+      status: { $in: [SessionStatus.SCHEDULED, SessionStatus.IN_PROGRESS] }
     })
       .populate({
         path: 'lesson',
-        select: 'title _id schedule status description isTrialAvailable',
+        select: 'title _id schedule status description isTrialAvailable teacherId',
         populate: {
           path: 'teacherId',
-          select: 'name _id',
+          select: 'name _id profileImage',
           populate: { path: 'profileImage', select: 'url' }
         }
       })
       .populate({
         path: 'course',
-        select: 'title _id mode description lessonType',
+        select: 'title _id mode description lessonType introImageRef',
         populate: { path: 'introImageRef', select: 'url' }
       })
-      .select('joinUrl status start end')
+      .select('joinUrl status start end lesson course')
+      .sort({ start: 1 })
+      .skip(skip)
+      .limit(opts.limit)
       .lean();
 
-    const teacherIds = lessons.map((lesson: any) => lesson.lesson?.teacherId?._id).filter(Boolean);
+    // Teacher ratings (avoid bad $in if empty)
+    const teacherIds = sessions
+      .map((s: any) => s.lesson?.teacherId?._id)
+      .filter(Boolean)
+      .map((id: any) => new Types.ObjectId(String(id)));
 
-    const ratings = await FeedbackRating.aggregate([
-      {
-        $match: {
-          teacher: { $in: teacherIds }
+    let ratingsMap = new Map<string, { averageRating: number; totalRatings: number }>();
+
+    if (teacherIds.length) {
+      const ratings = await FeedbackRating.aggregate([
+        { $match: { teacher: { $in: teacherIds } } },
+        {
+          $group: {
+            _id: '$teacher',
+            averageRating: { $avg: '$rating' },
+            totalRatings: { $sum: 1 }
+          }
         }
-      },
-      {
-        $group: {
-          _id: '$teacher',
-          averageRating: { $avg: '$rating' },
-          totalRatings: { $count: {} }
-        }
-      }
-    ]);
+      ]);
 
-    const ratingsMap = new Map(
-      ratings.map(r => [
-        r._id.toString(),
-        { averageRating: r.averageRating, totalRatings: r.totalRatings }
-      ])
-    );
+      ratingsMap = new Map(
+        ratings.map(r => [
+          String(r._id),
+          { averageRating: Number(r.averageRating || 0), totalRatings: Number(r.totalRatings || 0) }
+        ])
+      );
+    }
 
-    const lessonsWithRatings = lessons.map((lesson: any) => {
-      if (lesson.lesson?.teacherId?._id) {
-        const teacherRating = ratingsMap.get(lesson.lesson.teacherId._id.toString());
+    // Attach rating onto teacher
+    return sessions.map((s: any) => {
+      const tId = s.lesson?.teacherId?._id ? String(s.lesson.teacherId._id) : null;
+      const rating = tId ? ratingsMap.get(tId) : null;
+
+      if (tId && rating) {
         return {
-          ...lesson,
+          ...s,
           lesson: {
-            ...lesson.lesson,
-            teacherId: {
-              ...lesson.lesson.teacherId,
-              rating: teacherRating || { averageRating: 0, totalRatings: 0 }
-            }
+            ...s.lesson,
+            teacherId: { ...s.lesson.teacherId, rating }
           }
         };
       }
-      return lesson;
-    });
 
-    return lessonsWithRatings;
+      if (tId) {
+        return {
+          ...s,
+          lesson: {
+            ...s.lesson,
+            teacherId: { ...s.lesson.teacherId, rating: { averageRating: 0, totalRatings: 0 } }
+          }
+        };
+      }
+      return s;
+    });
   },
 
   async getStudentCalendarOverview(

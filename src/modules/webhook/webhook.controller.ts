@@ -5,7 +5,9 @@ import Stripe from 'stripe';
 
 const STRIPE_WEBHOOK_SECRET =
   config.STRIPE_WEBHOOK_SECRET || process.env.STRIPE_WEBHOOK_SECRET || '';
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', { apiVersion: '2025-10-29.clover' });
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
+  apiVersion: config.STRIPE_API_VERSION || '2022-11-15'
+} as Stripe.StripeConfig);
 
 export async function handleStripeWebhook(req: Request, res: Response) {
   const sig = req.headers['stripe-signature'] as string | undefined;

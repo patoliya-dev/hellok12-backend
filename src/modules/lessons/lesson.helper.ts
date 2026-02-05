@@ -28,18 +28,17 @@ export const formatDateTime = (date: Date) => {
   };
 };
 
-export const transformSessionToLesson = (session: any) => {
+export const transformSessionToLesson = (session: any, role?: string) => {
+  const canShowJoinUrl = role === 'teacher'; // school/parent/student should not see joinUrl here
   return {
     _id: session._id.toString(),
     dateTime: formatDateTime(session.start),
     student: formatStudentInfo(session.studentData, session.courseType),
     courseType: session.courseType,
-    subject: {
-      name: session.courseName,
-      mode: session.courseMode
-    },
+    subject: { name: session.courseName, mode: session.courseMode },
     duration: session.duration,
-    status: session.status
+    status: session.status,
+    joinUrl: canShowJoinUrl ? session.joinUrl || null : null
   };
 };
 

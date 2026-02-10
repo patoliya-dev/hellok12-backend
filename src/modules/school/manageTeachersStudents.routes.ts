@@ -26,6 +26,13 @@ router.post(
   teachersStudentsInvitationController.inviteStudent
 );
 
+router.post(
+  '/parent/invite',
+  authenticate,
+  authorize([USER_ROLES.SCHOOL, USER_ROLES.SUPER_ADMIN]),
+  teachersStudentsInvitationController.inviteParent
+);
+
 router.get(
   '/invitations',
   authenticate,

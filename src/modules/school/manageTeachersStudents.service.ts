@@ -9,7 +9,7 @@ import { Invitation } from '../../models/invitation.model';
 import { normalizeEmail, generateRawToken, hashToken } from '../invitations/invitation.util';
 import { TeacherProfileDoc } from '../../models/teacherProfile.model';
 
-type RecipientRole = 'teacher' | 'student';
+type RecipientRole = 'teacher' | 'student' | 'parent';
 
 type ProfileImageLean = { url?: string } | null;
 
@@ -217,8 +217,10 @@ export const SchoolService = {
 
     if (role === 'teacher') {
       await emailService.sendTeacherInvitation(recipientEmail, inviter.name, inviteLink, message);
-    } else {
+    } else if (role === 'student') {
       await emailService.sendStudentInvitation(recipientEmail, inviter.name, inviteLink, message);
+    } else {
+      await emailService.sendParentInvitation(recipientEmail, inviter.name, inviteLink, message);
     }
 
     return {

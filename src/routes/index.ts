@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import authRoutes from '../modules/auth/auth.routes';
+import adminRoutes from '../modules/admin/admin.routes';
 import userRoutes from '../modules/user/user.routes';
 import courseRoutes from '../modules/courses/course.routes';
 import lessonRoutes from '../modules/lessons/lesson.routes';
@@ -21,6 +22,7 @@ const router = Router();
 
 // Prefix all routes with /api/v1 inside app.ts
 router.use('/auth', authRoutes);
+router.use('/admin', adminRoutes);
 router.use('/user', userRoutes);
 router.use('/courses', courseRoutes);
 router.use('/lessons', lessonRoutes);

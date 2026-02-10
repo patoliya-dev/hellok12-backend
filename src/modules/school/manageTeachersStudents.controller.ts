@@ -20,9 +20,10 @@ export const teachersStudentsInvitationController = {
 
   inviteTeacher: async (req: Request, res: Response) => {
     try {
-      const schoolId = req.user?.id as string;
+      const inviterId = req.user?.id as string;
+      const inviterRole = req.user?.role as string;
       const { email, message } = req.body;
-      const out = await SchoolService.inviteUser(schoolId, email, 'teacher', message);
+      const out = await SchoolService.inviteUser(inviterId, inviterRole, email, 'teacher', message);
       return res.status(201).json(createSuccessResponse(out, 'Teacher Invited Successfully'));
     } catch (e: any) {
       return handle(res, e);
@@ -31,9 +32,10 @@ export const teachersStudentsInvitationController = {
 
   inviteStudent: async (req: Request, res: Response) => {
     try {
-      const schoolId = req.user?.id as string;
+      const inviterId = req.user?.id as string;
+      const inviterRole = req.user?.role as string;
       const { email, message } = req.body;
-      const out = await SchoolService.inviteUser(schoolId, email, 'student', message);
+      const out = await SchoolService.inviteUser(inviterId, inviterRole, email, 'student', message);
       return res.status(201).json(createSuccessResponse(out, 'Student Invited Successfully'));
     } catch (e: any) {
       return handle(res, e);
@@ -85,17 +87,30 @@ export const teachersStudentsInvitationController = {
 
   getStudents: async (req: Request, res: Response) => {
     try {
-      const { page = '1', limit = '10', search = '', status = '' } = req.query;
+      const {
+        page = '1',
+        limit = '10',
+        search = '',
+        status = '',
+        school = '',
+        language = '',
+        ageRange = ''
+      } = req.query as any;
 
-      const schoolId = req.user?.id as string;
+      const inviterId = req.user?.id as string;
+      const inviterRole = req.user?.role as string;
 
-      const out = await SchoolService.getStudents(
-        schoolId,
-        String(page),
-        String(limit),
-        String(search || ''),
-        String(status || '')
-      );
+      const out = await SchoolService.getStudents({
+        inviterId,
+        inviterRole,
+        page: String(page),
+        limit: String(limit),
+        search: String(search || ''),
+        status: String(status || ''),
+        school: String(school || ''),
+        language: String(language || ''),
+        ageRange: String(ageRange || '')
+      });
 
       return res.status(200).json(createSuccessResponse(out, 'Students Fetched Successfully'));
     } catch (e: any) {

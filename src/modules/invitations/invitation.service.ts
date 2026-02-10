@@ -98,7 +98,9 @@ export const InvitationService = {
         isVerified: true,
         role: String(inv.recipientRole).toLowerCase(),
         password: password,
-        school: inv.organization || inv.invitedBy
+        ...(inv.inviterRole === 'school'
+          ? { school: inv.organization || inv.invitedBy }
+          : { admin: inv.organization || inv.invitedBy })
       });
     } else {
       // IMPORTANT: existing user -> must prove identity before issuing token
@@ -114,12 +116,14 @@ export const InvitationService = {
 
     // Link to school + approval state for teacher
     if (String(inv.recipientRole).toLowerCase() === 'teacher') {
-      user.school = inv.organization || inv.invitedBy;
+      if (inv.inviterRole === 'school') user.school = inv.organization || inv.invitedBy;
+      if (inv.inviterRole === 'super_admin') user.admin = inv.organization || inv.invitedBy;
       user.profile = { ...(user.profile || {}), status: 'pending_approval' };
     }
 
     if (String(inv.recipientRole)?.toLowerCase() === 'student') {
-      user.school = inv.organization || inv.invitedBy;
+      if (inv.inviterRole === 'school') user.school = inv.organization || inv.invitedBy;
+      if (inv.inviterRole === 'super_admin') user.admin = inv.organization || inv.invitedBy;
       user.status = 'active';
     }
 

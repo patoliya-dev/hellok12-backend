@@ -36,6 +36,24 @@ export const adminController = {
     }
   },
 
+  getTeachers: async (req: Request, res: Response) => {
+    try {
+      const result = await AdminService.getTeachers({
+        page: String(req.query.page || '1'),
+        limit: String(req.query.limit || '10'),
+        search: req.query.search ? String(req.query.search) : undefined,
+        status: req.query.status ? String(req.query.status) : undefined,
+        school: req.query.school ? String(req.query.school) : undefined,
+        experience: req.query.experience ? String(req.query.experience) : undefined,
+        teacherType: req.query.teacherType ? String(req.query.teacherType) : 'school' // school | independent
+      });
+
+      return res.status(200).json(createSuccessResponse(result));
+    } catch (e: any) {
+      return res.status(e?.statusCode || 500).json(createErrorResponse(e?.message || 'Error', e));
+    }
+  },
+
   updateUser: async (req: Request, res: Response) => {
     try {
       const { userId } = req.params;

@@ -19,6 +19,13 @@ router.get(
   adminController.getParents
 );
 
+router.get(
+  '/teachers',
+  authenticate,
+  authorize([USER_ROLES.SUPER_ADMIN]),
+  adminController.getTeachers
+);
+
 router.patch(
   '/users/:userId',
   authenticate,

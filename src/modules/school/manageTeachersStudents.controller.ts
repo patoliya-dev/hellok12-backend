@@ -22,8 +22,15 @@ export const teachersStudentsInvitationController = {
     try {
       const inviterId = req.user?.id as string;
       const inviterRole = req.user?.role as string;
-      const { email, message } = req.body;
-      const out = await SchoolService.inviteUser(inviterId, inviterRole, email, 'teacher', message);
+      const { email, message, schoolId } = req.body;
+      const out = await SchoolService.inviteUser(
+        inviterId,
+        inviterRole,
+        email,
+        'teacher',
+        message,
+        schoolId
+      );
       return res.status(201).json(createSuccessResponse(out, 'Teacher Invited Successfully'));
     } catch (e: any) {
       return handle(res, e);
@@ -56,18 +63,28 @@ export const teachersStudentsInvitationController = {
 
   listInvitations: async (req: Request, res: Response) => {
     try {
-      const schoolId = req.user?.id as string;
+      const inviterId = req.user?.id as string;
+      const inviterRole = req.user?.role as string;
 
-      const { role = '', status = '', search = '', page = '1', limit = '10' } = req.query;
+      const {
+        role = '',
+        status = '',
+        search = '',
+        page = '1',
+        limit = '10',
+        teacherType = ''
+      } = req.query;
 
-      const out = await SchoolService.listInvitations(
-        schoolId,
-        String(role || ''),
-        String(status || ''),
-        String(search || ''),
-        String(page || '1'),
-        String(limit || '10')
-      );
+      const out = await SchoolService.listInvitationsV2({
+        inviterId,
+        inviterRole,
+        role: String(role || ''),
+        status: String(status || ''),
+        search: String(search || ''),
+        page: String(page || '1'),
+        limit: String(limit || '10'),
+        teacherType: String(teacherType || '') as any
+      });
 
       return res.status(200).json(createSuccessResponse(out, 'Invitations Fetched Successfully'));
     } catch (e: any) {

@@ -7,5 +7,8 @@ export const mapInvitationForApi = (inv: InvitationDoc | any) => ({
   invitationMessage: inv.invitationMessage || '',
   status: String(inv.status).toUpperCase(),
   expiresAt: inv.expiresAt,
-  createdAt: inv.createdAt
+  createdAt: inv.createdAt,
+  inviterRole: inv.inviterRole,
+  organization: inv.organization ?? null,
+  meta: inv.meta ?? {}
 });

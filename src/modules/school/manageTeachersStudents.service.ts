@@ -60,6 +60,22 @@ type GetStudentsArgs = {
   ageRange?: string;
 };
 
+const normalize = (v: any) =>
+  String(v || '')
+    .trim()
+    .toLowerCase();
+
+type ListInvitationsArgs = {
+  inviterId: string;
+  inviterRole: string; // "school" | "super_admin"
+  role?: string;
+  status?: string;
+  search?: string;
+  page?: string;
+  limit?: string;
+  teacherType?: string; // "school" | "independent" (super_admin only)
+};
+
 export const SchoolService = {
   getSchoolTeachers: async (schoolId: string) => {
     const schoolObjectId = new Types.ObjectId(schoolId);
@@ -162,15 +178,65 @@ export const SchoolService = {
     inviterRole: string,
     email: string,
     recipientRole: RecipientRole,
-    message?: string
+    message?: string,
+    schoolId?: string
   ) => {
     const recipientEmail = normalizeEmail(email);
     const role = recipientRole as 'teacher' | 'student';
 
+    const inviterRoleNorm = String(inviterRole || '')
+      .trim()
+      .toLowerCase();
+
+    // Always validate inviter exists
     const inviter = await User.findById(inviterId).lean();
-    if (!inviter) throw Object.assign(new Error('School not found'), { statusCode: 404 });
-    if (!inviter.isVerified)
-      throw Object.assign(new Error('School must be verified'), { statusCode: 403 });
+    if (!inviter) throw Object.assign(new Error('Inviter not found'), { statusCode: 404 });
+
+    // Decide organization scope + email display name
+    let organizationId: Types.ObjectId | null = null;
+    let inviterDisplayName = 'HelloK12';
+    let teacherType: 'school' | 'independent' | null = null;
+
+    // 1) SCHOOL inviter -> original behavior
+    if (inviterRoleNorm === 'school') {
+      if (!inviter.isVerified)
+        throw Object.assign(new Error('School must be verified'), { statusCode: 403 });
+
+      organizationId = new Types.ObjectId(inviterId);
+      inviterDisplayName = inviter.name || 'School';
+      teacherType = role === 'teacher' ? 'school' : null;
+    }
+
+    // 2) SUPER_ADMIN inviter -> optional schoolId
+    if (inviterRoleNorm === 'super_admin') {
+      const schoolObjectId =
+        schoolId && Types.ObjectId.isValid(String(schoolId))
+          ? new Types.ObjectId(String(schoolId))
+          : null;
+
+      if (role === 'teacher') {
+        if (schoolObjectId) {
+          // school teacher invitation
+          const school = await User.findById(schoolObjectId).lean();
+          if (!school) throw Object.assign(new Error('School not found'), { statusCode: 404 });
+          if (!school.isVerified)
+            throw Object.assign(new Error('School must be verified'), { statusCode: 403 });
+
+          organizationId = schoolObjectId;
+          inviterDisplayName = school.name || 'School';
+          teacherType = 'school';
+        } else {
+          // independent teacher invitation
+          organizationId = null;
+          inviterDisplayName = 'HelloK12';
+          teacherType = 'independent';
+        }
+      } else {
+        // If later you support super_admin invites for student/parent, default to platform scope
+        organizationId = null;
+        inviterDisplayName = 'HelloK12';
+      }
+    }
 
     const existingUser = await User.findOne({ email: recipientEmail }).lean();
     if (existingUser && existingUser.role !== role.toLowerCase()) {
@@ -180,7 +246,7 @@ export const SchoolService = {
     const now = new Date();
 
     const already = await Invitation.findOne({
-      organization: new Types.ObjectId(inviterId),
+      organization: organizationId, // organization can be null
       recipientEmail,
       recipientRole: role,
       status: 'pending',
@@ -201,14 +267,18 @@ export const SchoolService = {
 
     const invitation = await Invitation.create({
       invitedBy: inviterId,
-      organization: inviterId,
+      organization: organizationId, // null for independent invites
       recipientEmail,
       recipientRole: role,
       inviterRole,
       invitationMessage: message || '',
       inviteToken: tokenHash,
       status: 'pending',
-      meta: { flow: `${inviterRole.toUpperCase()}_INVITE` },
+      meta: {
+        flow: `${inviterRoleNorm.toUpperCase()}_INVITE`,
+        ...(role === 'teacher' && teacherType ? { teacherType } : {}),
+        ...(role === 'teacher' && organizationId ? { schoolId: String(organizationId) } : {})
+      },
       expiresAt
     });
 
@@ -216,11 +286,26 @@ export const SchoolService = {
     const inviteLink = `${clientURL}/accept-invitation?inviteId=${invitation._id}&ticket=${rawTicket}`;
 
     if (role === 'teacher') {
-      await emailService.sendTeacherInvitation(recipientEmail, inviter.name, inviteLink, message);
+      await emailService.sendTeacherInvitation(
+        recipientEmail,
+        inviterDisplayName,
+        inviteLink,
+        message
+      );
     } else if (role === 'student') {
-      await emailService.sendStudentInvitation(recipientEmail, inviter.name, inviteLink, message);
+      await emailService.sendStudentInvitation(
+        recipientEmail,
+        inviterDisplayName,
+        inviteLink,
+        message
+      );
     } else {
-      await emailService.sendParentInvitation(recipientEmail, inviter.name, inviteLink, message);
+      await emailService.sendParentInvitation(
+        recipientEmail,
+        inviterDisplayName,
+        inviteLink,
+        message
+      );
     }
 
     return {
@@ -275,6 +360,95 @@ export const SchoolService = {
         .skip(skip)
         .limit(limitNum)
         .select('recipientEmail recipientRole status expiresAt createdAt invitationMessage')
+        .lean()
+    ]);
+
+    const pages = Math.max(1, Math.ceil(total / limitNum));
+
+    return {
+      invitations,
+      pagination: {
+        total,
+        page: pageNum,
+        limit: limitNum,
+        pages,
+        hasNextPage: pageNum < pages,
+        hasPrevPage: pageNum > 1
+      }
+    };
+  },
+
+  listInvitationsV2: async ({
+    inviterId,
+    inviterRole,
+    role = '',
+    status = '',
+    search = '',
+    page = '1',
+    limit = '10',
+    teacherType = ''
+  }: ListInvitationsArgs) => {
+    const pageNum = Math.max(1, parseInt(String(page || '1'), 10) || 1);
+    const limitNum = Math.max(1, Math.min(100, parseInt(String(limit || '10'), 10) || 10));
+    const skip = (pageNum - 1) * limitNum;
+
+    const invRole = normalize(inviterRole);
+    const normalizedRole = normalize(role);
+    const normalizedStatus = normalize(status);
+    const normalizedTeacherType = normalize(teacherType);
+
+    const query: any = {};
+
+    /**
+     * SCHOOL behavior (unchanged):
+     * school sees only its org invitations (includes school invited teachers/students/parents)
+     */
+    if (invRole === 'school') {
+      query.organization = new Types.ObjectId(inviterId);
+    }
+
+    /**
+     * SUPER_ADMIN behavior (FIX):
+     * - Do NOT show invitations created by schools
+     * - Only show invitations created by super_admin
+     * - Filter by teacherType (school/independent) using meta.teacherType
+     * - If teacherType=school, ensure organization exists
+     * - If teacherType=independent, ensure organization is null
+     */
+    if (invRole === 'super_admin') {
+      query.inviterRole = 'super_admin';
+
+      // For teachers manage, UI will request role=teacher always
+      // but keep generic
+      if (normalizedTeacherType) {
+        query['meta.teacherType'] = normalizedTeacherType;
+
+        if (normalizedTeacherType === 'school') {
+          query.organization = { $type: 'objectId' }; // organization must exist
+        } else if (normalizedTeacherType === 'independent') {
+          query.$or = [{ organization: null }, { organization: { $exists: false } }];
+        }
+      }
+    }
+
+    if (normalizedRole) query.recipientRole = normalizedRole;
+    if (normalizedStatus && normalizedStatus !== 'all') query.status = normalizedStatus;
+
+    const s = String(search || '').trim();
+    if (s) {
+      const rx = new RegExp(escapeRegex(s), 'i');
+      query.$or = [{ recipientEmail: rx }];
+    }
+
+    const [total, invitations] = await Promise.all([
+      Invitation.countDocuments(query),
+      Invitation.find(query)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum)
+        .select(
+          'recipientEmail recipientRole status expiresAt createdAt invitationMessage inviterRole organization meta'
+        )
         .lean()
     ]);
 

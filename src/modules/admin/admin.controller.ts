@@ -62,5 +62,15 @@ export const adminController = {
     } catch (e: any) {
       return handle(res, e);
     }
+  },
+
+  getSchoolDetails: async (req: Request, res: Response) => {
+    try {
+      const { schoolId } = req.params;
+      const data = await AdminService.getSchoolDetails(schoolId);
+      return res.status(200).json(createSuccessResponse(data, 'School details fetched'));
+    } catch (e: any) {
+      return handle(res, e);
+    }
   }
 };

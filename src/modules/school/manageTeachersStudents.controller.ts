@@ -61,6 +61,18 @@ export const teachersStudentsInvitationController = {
     }
   },
 
+  inviteSchool: async (req: Request, res: Response) => {
+    try {
+      const inviterId = req.user?.id as string;
+      const inviterRole = req.user?.role as string;
+      const { email, message } = req.body;
+      const out = await SchoolService.inviteUser(inviterId, inviterRole, email, 'school', message);
+      return res.status(201).json(createSuccessResponse(out, 'Parent Invited Successfully'));
+    } catch (e: any) {
+      return handle(res, e);
+    }
+  },
+
   listInvitations: async (req: Request, res: Response) => {
     try {
       const inviterId = req.user?.id as string;

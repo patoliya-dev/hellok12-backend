@@ -5,32 +5,17 @@ import { adminController } from './admin.controller';
 
 const router = Router();
 
-router.get(
-  '/schools',
-  authenticate,
-  authorize([USER_ROLES.SUPER_ADMIN]),
-  adminController.getSchools
-);
+router.use(authenticate);
+router.use(authorize([USER_ROLES.SUPER_ADMIN]));
 
-router.get(
-  '/parents',
-  authenticate,
-  authorize([USER_ROLES.SUPER_ADMIN]),
-  adminController.getParents
-);
+router.get('/parents', adminController.getParents);
 
-router.get(
-  '/teachers',
-  authenticate,
-  authorize([USER_ROLES.SUPER_ADMIN]),
-  adminController.getTeachers
-);
+router.get('/teachers', adminController.getTeachers);
 
-router.patch(
-  '/users/:userId',
-  authenticate,
-  authorize([USER_ROLES.SUPER_ADMIN]),
-  adminController.updateUser
-);
+router.patch('/users/:userId', adminController.updateUser);
+
+router.get('/schools', adminController.getSchools);
+
+router.get('/schools/:schoolId/details', adminController.getSchoolDetails);
 
 export default router;

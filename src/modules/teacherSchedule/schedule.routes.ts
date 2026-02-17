@@ -12,7 +12,7 @@ import {
 import * as ctrl from './schedule.controller';
 
 const r = Router();
-const allow = ['teacher', 'school']; // extend if admins need access
+const allow = ['teacher', 'school', 'super_admin']; // extend if admins need access
 
 // 1) Read schedule (no auto-create)
 r.get(

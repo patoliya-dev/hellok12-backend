@@ -728,6 +728,33 @@ export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
           }
         },
         {
+          $lookup: {
+            from: 'sessions',
+            let: { courseId: '$_id' },
+            pipeline: [
+              {
+                $match: {
+                  $expr: { $eq: ['$course', '$$courseId'] }
+                }
+              },
+              {
+                $group: {
+                  _id: null,
+                  lastLessonDate: { $max: '$end' }
+                }
+              }
+            ],
+            as: 'sessionStats'
+          }
+        },
+        {
+          $addFields: {
+            lastLessonDate: {
+              $ifNull: [{ $arrayElemAt: ['$sessionStats.lastLessonDate', 0] }, '$endDate']
+            }
+          }
+        },
+        {
           $project: {
             title: 1,
             description: 1,
@@ -740,7 +767,8 @@ export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
             lessonType: 1,
             location: 1,
             isTrialAvailable: 1,
-            mode: 1
+            mode: 1,
+            lastLessonDate: 1
           }
         }
       ],

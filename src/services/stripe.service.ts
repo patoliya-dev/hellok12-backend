@@ -163,16 +163,18 @@ async function applyPurchaseEffectsFromMetadata(meta: Record<string, string>, tx
   const courseId = booking.course;
 
   if (studentId && courseId) {
-    // Add student to all sessions of course
-    // await SessionModel.updateMany({ course: courseId }, { $addToSet: { students: studentId } });
+    const now = new Date();
+    // Add student only to upcoming sessions of this course.
     await SessionModel.updateMany(
-      { course: courseId, start: { $gte: new Date() } },
+      { course: courseId, start: { $gte: now } },
       { $addToSet: { students: studentId } }
     );
 
-    const sessionIds = (await SessionModel.find({ course: courseId }).select('_id').lean()).map(
-      s => s._id
-    );
+    const sessionIds = (
+      await SessionModel.find({ course: courseId, start: { $gte: now } })
+        .select('_id')
+        .lean()
+    ).map(s => s._id);
 
     // Booking update (atomic)
     await BookingModel.updateOne(
@@ -332,6 +334,25 @@ export interface CreatePaymentIntentParams {
   metadata?: Record<string, string>;
 }
 
+async function resolveCourseTitle(
+  courseTitle?: string,
+  metadata?: Record<string, string>,
+  courseId?: string
+) {
+  const directTitle =
+    courseTitle?.trim() ||
+    metadata?.courseTitle?.trim() ||
+    metadata?.courseName?.trim() ||
+    metadata?.title?.trim();
+  if (directTitle) return directTitle;
+
+  const resolvedCourseId = courseId || metadata?.courseId;
+  if (!resolvedCourseId || !Types.ObjectId.isValid(resolvedCourseId)) return null;
+
+  const courseDoc = await Course.findById(resolvedCourseId).select({ title: 1 }).lean();
+  return courseDoc?.title?.trim() || null;
+}
+
 // ----------------------------- Main API entry -----------------------------
 /**
  * Invoice-first “create payment intent” API (kept name for compatibility).
@@ -368,12 +389,13 @@ export async function createPaymentIntent(params: CreatePaymentIntentParams): Pr
   if (!idempotencyKey) throw new Error('idempotencyKey is required for strict idempotency');
 
   const user = await createOrGetCustomerForUser(userId);
+  const resolvedCourseTitle = await resolveCourseTitle(courseTitle, metadata, courseId);
 
   const canonicalMeta: Record<string, string> = {
     userId: String(userId),
     bookingId: bookingId || '',
     courseId: courseId || '',
-    courseTitle: courseTitle || '',
+    courseTitle: resolvedCourseTitle || '',
     teacherId: teacherId || '',
     payoutReceiverType: payoutReceiverType || metadata.payoutReceiverType || '',
     payoutReceiverId: payoutReceiverId || metadata.payoutReceiverId || '',
@@ -407,7 +429,7 @@ export async function createPaymentIntent(params: CreatePaymentIntentParams): Pr
   }
 
   // 2) Stripe idempotency: create invoice + PI (NO PAY)
-  const items = [{ amount, currency, description: courseTitle || 'Course purchase' }];
+  const items = [{ amount, currency, description: resolvedCourseTitle || 'Course purchase' }];
 
   const { invoice, paymentIntent } = await createInvoiceAndCharge(stripe, {
     customerId: user.stripeCustomerId!,
@@ -446,7 +468,7 @@ export async function createPaymentIntent(params: CreatePaymentIntentParams): Pr
           stripeInvoiceId: { $ifNull: ['$stripeInvoiceId', invoice.id] },
           stripePaymentIntentId: { $ifNull: ['$stripePaymentIntentId', paymentIntent.id] },
 
-          title: { $ifNull: ['$title', courseTitle || 'Course Purchase'] },
+          title: { $ifNull: ['$title', resolvedCourseTitle || 'Course Purchase'] },
           reference: { $ifNull: ['$reference', invoice.number || `INV_${invoice.id}`] },
 
           // IMPORTANT: don’t overwrite metadata; set once if missing
@@ -543,7 +565,8 @@ export async function handleInvoicePaid(rawInvoice: Stripe.Invoice) {
     }
   }
 
-  const title = meta.courseTitle || 'Course Purchase';
+  const resolvedCourseTitle = await resolveCourseTitle(meta.courseTitle, meta, meta.courseId);
+  const title = resolvedCourseTitle || 'Course Purchase';
   const reference = invoice.number || `INV_${invoice.id}`;
   const amountDisplay = `$${(grossAmount / 100).toFixed(2)}`;
 
@@ -893,11 +916,12 @@ export async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent) {
     ? `INV_${stripeInvoiceId}`
     : `REF_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}_${String(Math.floor(Math.random() * 9000) + 1000)}`;
 
-  const title =
-    (pi.metadata as any)?.courseTitle ||
-    (pi.metadata as any)?.courseName ||
-    (pi.metadata as any)?.title ||
-    'Course Purchase';
+  const resolvedCourseTitle = await resolveCourseTitle(
+    (pi.metadata as any)?.courseTitle,
+    pi.metadata as any,
+    (pi.metadata as any)?.courseId
+  );
+  const title = resolvedCourseTitle || 'Course Purchase';
 
   // Upsert transaction
   if (!tx) {
@@ -949,11 +973,7 @@ export async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent) {
 
   // Build invoice items and upsert invoice (same as before)
   const items: any[] = [];
-  const courseLabel =
-    (pi.metadata as any)?.courseTitle ||
-    (pi.metadata as any)?.courseName ||
-    (pi.metadata as any)?.title ||
-    'Course';
+  const courseLabel = resolvedCourseTitle || 'Course';
   items.push({ description: courseLabel, quantity: 1, price: amount, priceDisplay: amountDisplay });
   items.push({
     description: 'Platform Fee',
@@ -1028,14 +1048,16 @@ export async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent) {
         // 1) Add student to all future sessions of this course
         await SessionModel.updateMany(
           {
-            course: courseId
+            course: courseId,
+            start: { $gte: now }
           },
           { $addToSet: { students: studentId } }
         );
 
         // 2) Retrieve all session IDs where this student is now attached
         const updatedSessions = await SessionModel.find({
-          course: courseId
+          course: courseId,
+          start: { $gte: now }
         })
           .select('_id')
           .lean();

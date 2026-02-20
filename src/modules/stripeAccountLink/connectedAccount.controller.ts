@@ -79,7 +79,7 @@ export async function getAccountStatus(req: Request, res: Response, next: NextFu
     const userId = (req as any).user?.id;
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });
     const user = await User.findById(userId);
-    if (!user || !user.stripeAccountId) return res.json({ success: true, account: null });
+    if (!user || !user.stripeAccountId) return res.json({ success: true, accountSummary: null });
 
     const account = await stripe.accounts.retrieve(user.stripeAccountId);
     // minimal shape

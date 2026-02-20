@@ -8,6 +8,17 @@ function handle(res: Response, error: any) {
 }
 
 export const adminController = {
+  getDashboardOverview: async (req: Request, res: Response) => {
+    try {
+      const data = await AdminService.getDashboardOverview({
+        months: req.query.months ? String(req.query.months) : undefined
+      });
+      return res.status(200).json(createSuccessResponse(data, 'Dashboard overview fetched'));
+    } catch (e: any) {
+      return handle(res, e);
+    }
+  },
+
   getSchools: async (req: Request, res: Response) => {
     try {
       const { page = '1', limit = '50', search = '' } = req.query;

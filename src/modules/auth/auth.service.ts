@@ -306,7 +306,8 @@ export const authService = {
   login: async (
     email: string,
     password: string,
-    rememberMe: boolean = false
+    rememberMe: boolean = false,
+    options: { allowedRoles?: IUser['role'][] } = {}
   ): Promise<AuthResult> => {
     try {
       const user = await User.findOne({ email: email.toLowerCase() });
@@ -328,6 +329,12 @@ export const authService = {
       // Check account status
       if (user.role === 'school' && user.profile?.status === 'pending_approval') {
         throw new Error('School account is pending admin approval');
+      }
+
+      if (Array.isArray(options?.allowedRoles) && options.allowedRoles.length > 0) {
+        if (!options.allowedRoles.includes(user.role)) {
+          throw new Error('You are not allowed to login from this portal');
+        }
       }
 
       // Generate tokens with appropriate expiry
@@ -918,7 +925,7 @@ export const authService = {
     email?: string;
     password?: string;
     phone?: string;
-    role: IUser['role'];
+    role: Exclude<IUser['role'], 'super_admin'>;
     schoolId?: string;
     children?: { name: string; age?: number; gender?: string }[];
   }): Promise<IUser> => {

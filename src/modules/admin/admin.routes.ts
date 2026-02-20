@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { authenticate, authorize } from '../../middlewares/auth';
 import { USER_ROLES } from '../../utils/constants';
 import { adminController } from './admin.controller';
+import adminFinancialRoutes from './financial/adminFinancial.routes';
 
 const router = Router();
 
@@ -17,5 +18,7 @@ router.patch('/users/:userId', adminController.updateUser);
 router.get('/schools', adminController.getSchools);
 
 router.get('/schools/:schoolId/details', adminController.getSchoolDetails);
+
+router.use('/financial', adminFinancialRoutes);
 
 export default router;

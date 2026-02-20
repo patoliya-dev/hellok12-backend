@@ -52,12 +52,7 @@ export const getUpcomingSessions = async (
     teachers: teacherObjId
   };
 
-  console.log('courseFilter', courseFilter);
-
   const activeCourseDocs = await CourseModel.find(courseFilter).select({ _id: 1 }).lean();
-
-  console.log('activeCourseDocs', activeCourseDocs);
-
   const activeCourseIds = activeCourseDocs.map(c => c._id);
 
   // safe-empty to avoid $in: []

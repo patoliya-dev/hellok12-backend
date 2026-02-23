@@ -177,7 +177,7 @@ async function applyPurchaseEffectsFromMetadata(meta: Record<string, string>, tx
     ).map(s => s._id);
 
     // Booking update (atomic)
-    await BookingModel.updateOne(
+    const bookingUpdateResult = await BookingModel.updateOne(
       { _id: bookingId, paymentStatus: { $ne: 'PAID' } },
       {
         $set: { paymentStatus: 'PAID', transaction: txId, updatedAt: new Date() },
@@ -185,8 +185,9 @@ async function applyPurchaseEffectsFromMetadata(meta: Record<string, string>, tx
       }
     );
 
-    // Course increment (only if not trial)
-    if (!booking.isTrial) {
+    // Course increment (only if this call transitioned booking -> PAID and booking is not trial)
+    const newlyMarkedPaid = Number((bookingUpdateResult as any)?.modifiedCount || 0) > 0;
+    if (newlyMarkedPaid && !booking.isTrial) {
       const updatedCourse = await Course.findOneAndUpdate(
         {
           _id: courseId,
@@ -1033,6 +1034,7 @@ export async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent) {
   }
 
   // Update booking atomically and add student to sessions
+  let bookingTransitionedToPaid = false;
   try {
     const bookingId = (pi.metadata as any)?.bookingId;
     if (bookingId) {
@@ -1078,15 +1080,8 @@ export async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent) {
           update.$addToSet = { sessions: { $each: sessionIds } };
         }
 
-        await BookingModel.updateOne(filter, update).exec();
-
-        // 3) Save to booking.sessions
-        if (sessionIds.length > 0) {
-          await BookingModel.findByIdAndUpdate(bookingId, {
-            $addToSet: { sessions: { $each: sessionIds } },
-            paymentStatus: 'PAID'
-          });
-        }
+        const bookingUpdateResult = await BookingModel.updateOne(filter, update).exec();
+        bookingTransitionedToPaid = Number((bookingUpdateResult as any)?.modifiedCount || 0) > 0;
       }
     }
   } catch (err) {
@@ -1098,7 +1093,7 @@ export async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent) {
     const bookingId = (pi.metadata as any)?.bookingId;
     if (bookingId) {
       const booking = await BookingModel.findById(bookingId).lean();
-      if (booking && !booking.isTrial) {
+      if (booking && bookingTransitionedToPaid && !booking.isTrial) {
         const courseId = booking.course || (pi.metadata as any)?.courseId;
         if (courseId) {
           // Use a safe atomic condition: either group and enrolledCount < studentCapacity OR 1-on-1 and enrolledCount < 1

@@ -81,7 +81,16 @@ const teacherProfileAllowed = [
 
 const studentProfileAllowed = ['address', 'languages', 'age', 'gender', 'grade'] as const;
 const parentProfileAllowed = ['address'] as const;
-const schoolProfileAllowed = ['schoolName', 'schoolType', 'website', 'description'] as const;
+const schoolProfileAllowed = [
+  'schoolName',
+  'schoolType',
+  'website',
+  'description',
+  'teachersDisplayLink',
+  'addresses',
+  'address1',
+  'address2'
+] as const;
 
 export const sanitizeProfile = (role: string, profile: any) => {
   if (!profile || typeof profile !== 'object') return null;

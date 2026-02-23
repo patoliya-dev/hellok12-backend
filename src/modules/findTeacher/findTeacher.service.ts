@@ -50,5 +50,55 @@ export const FindTeacherService = {
       Logger.error('Error in FindTeacherService.get:', error);
       throw error;
     }
+  },
+
+  async listSchools() {
+    try {
+      const schools = await User.aggregate([
+        {
+          $match: {
+            role: 'teacher',
+            school: { $exists: true, $ne: null }
+          }
+        },
+        {
+          $group: {
+            _id: '$school'
+          }
+        },
+        {
+          $lookup: {
+            from: 'users',
+            localField: '_id',
+            foreignField: '_id',
+            as: 'school'
+          }
+        },
+        {
+          $unwind: '$school'
+        },
+        {
+          $match: {
+            'school.role': 'school'
+          }
+        },
+        {
+          $project: {
+            _id: '$school._id',
+            name: '$school.name'
+          }
+        },
+        {
+          $sort: {
+            name: 1
+          }
+        }
+      ]);
+
+      return schools;
+    } catch (error) {
+      Logger.error('Error in FindTeacherService.listSchools:', error);
+      throw error;
+    }
   }
 };

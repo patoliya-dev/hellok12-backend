@@ -1,4 +1,5 @@
 import { Types } from 'mongoose';
+import { AGE_GROUPS } from '../../utils/constants';
 
 export const findTeacherQuery = ({ filters = {}, priceRange, offset, limit }: any) => {
   const pipeline: any[] = [];
@@ -70,7 +71,8 @@ export const findTeacherQuery = ({ filters = {}, priceRange, offset, limit }: an
 
   // Match ageRange
   if (filters.ageRange) {
-    profileMatchFilters['profile.ageGroupTeach'] = { $in: [filters.ageRange] };
+    const ageRangesToMatch = getOverlappingAgeRanges(filters.ageRange);
+    profileMatchFilters['profile.ageGroupTeach'] = { $in: ageRangesToMatch };
   }
 
   if (profileMatchFilters && Object.keys(profileMatchFilters).length > 0) {
@@ -306,6 +308,37 @@ export const findTeacherQuery = ({ filters = {}, priceRange, offset, limit }: an
 
   return pipeline;
 };
+
+function getOverlappingAgeRanges(inputAgeRange: string): string[] {
+  const normalized = String(inputAgeRange).trim();
+  const parsedInputRange = parseNumericRange(normalized);
+
+  if (!parsedInputRange) {
+    return [normalized];
+  }
+
+  const overlaps = AGE_GROUPS.filter(group => {
+    const parsedGroupRange = parseNumericRange(group);
+    if (!parsedGroupRange) return false;
+
+    const [inputMin, inputMax] = parsedInputRange;
+    const [groupMin, groupMax] = parsedGroupRange;
+    return Math.max(inputMin, groupMin) <= Math.min(inputMax, groupMax);
+  });
+
+  return Array.from(new Set([normalized, ...overlaps]));
+}
+
+function parseNumericRange(value: string): [number, number] | null {
+  const match = value.match(/^(\d+)\s*-\s*(\d+)$/);
+  if (!match) return null;
+
+  const min = Number(match[1]);
+  const max = Number(match[2]);
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+
+  return min <= max ? [min, max] : [max, min];
+}
 
 /**
  * Build MongoDB match condition for availability filter

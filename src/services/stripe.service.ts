@@ -11,6 +11,8 @@ import PayoutModel from '../models/payout.model';
 import { Course } from '../models/course.model';
 import { extractPayoutContext } from './stripe.helper';
 import { Types } from 'mongoose';
+import { notificationService } from '../modules/notifications/notification.service';
+import Logger from '../utils/winstonLogger.utils';
 
 const { STRIPE_SECRET_KEY, PLATFORM_FEE_PERCENT = 20, STRIPE_API_VERSION = '2022-11-15' } = config;
 
@@ -214,6 +216,138 @@ async function applyPurchaseEffectsFromMetadata(meta: Record<string, string>, tx
       }
     }
   }
+}
+
+async function notifyAdminsOnPurchasePaid({
+  meta,
+  tx,
+  paymentIntentId,
+  invoiceId,
+  idempotencySeed
+}: {
+  meta: Record<string, string>;
+  tx: any;
+  paymentIntentId?: string | null;
+  invoiceId?: string | null;
+  idempotencySeed: string;
+}) {
+  const [admins, purchaser, course] = await Promise.all([
+    User.find({ role: 'super_admin' }).select('_id').lean(),
+    meta.userId
+      ? User.findById(meta.userId).select('_id name email role').lean()
+      : Promise.resolve(null),
+    meta.courseId
+      ? Course.findById(meta.courseId).select('_id title ownerType ownerId').lean()
+      : Promise.resolve(null)
+  ]);
+  if (!admins.length) return;
+
+  const amountCents = Number((tx as any)?.amount || 0);
+  const currency = String((tx as any)?.currency || 'usd').toUpperCase();
+  const amountDisplay =
+    (tx as any)?.amountDisplay || `${currency} ${(amountCents / 100).toFixed(2)}`;
+  const purchaserName = String((purchaser as any)?.name || 'A user');
+  const purchaserEmail = String((purchaser as any)?.email || '');
+  const courseTitle = String((course as any)?.title || 'Course');
+  const ownerContext =
+    (course as any)?.ownerType === 'school'
+      ? { schoolId: String((course as any)?.ownerId || ''), teacherId: null }
+      : { schoolId: null, teacherId: String((course as any)?.ownerId || '') };
+
+  const canonicalSeed = String(idempotencySeed || '').trim();
+  await Promise.all(
+    admins.map(admin =>
+      notificationService.createOnce({
+        recipientUserId: String((admin as any)._id),
+        idempotencyKey: `${canonicalSeed}:${String((admin as any)._id)}`,
+        type: 'COURSE_PURCHASED',
+        title: 'New course purchase paid',
+        message: `${purchaserName} purchased ${courseTitle} (${amountDisplay}).`,
+        metadata: {
+          purchaser: {
+            id: meta.userId || null,
+            name: purchaserName,
+            email: purchaserEmail,
+            role: String((purchaser as any)?.role || '')
+          },
+          bookingId: meta.bookingId || null,
+          courseId: meta.courseId || null,
+          paymentIntentId: paymentIntentId || null,
+          stripeInvoiceId: invoiceId || null,
+          transactionId: String((tx as any)?._id || ''),
+          amountCents,
+          amountDisplay,
+          currency,
+          deepLink: '/admin/earning',
+          ...ownerContext
+        }
+      })
+    )
+  );
+}
+
+async function notifyPayeeOnPurchasePaid({
+  meta,
+  tx,
+  paymentIntentId,
+  idempotencySeed
+}: {
+  meta: Record<string, string>;
+  tx: any;
+  paymentIntentId?: string | null;
+  idempotencySeed: string;
+}) {
+  const payeeId = String((tx as any)?.payee || '').trim();
+  if (!payeeId) return;
+
+  const [purchaser, course] = await Promise.all([
+    meta.userId
+      ? User.findById(meta.userId).select('_id name email role').lean()
+      : Promise.resolve(null),
+    meta.courseId
+      ? Course.findById(meta.courseId).select('_id title').lean()
+      : Promise.resolve(null)
+  ]);
+
+  const amountCents = Number((tx as any)?.amount || 0);
+  const currency = String((tx as any)?.currency || 'usd').toUpperCase();
+  const amountDisplay =
+    (tx as any)?.amountDisplay || `${currency} ${(amountCents / 100).toFixed(2)}`;
+  const purchaserName = String((purchaser as any)?.name || 'A learner');
+  const purchaserEmail = String((purchaser as any)?.email || '');
+  const courseTitle = String((course as any)?.title || 'Course');
+  const payeeType = String((tx as any)?.payeeType || '');
+  const deepLink = payeeType === 'school' ? '/school/notifications' : '/teacher/notifications';
+  const canonicalSeed = String(idempotencySeed || '').trim();
+
+  await notificationService.createOnce({
+    recipientUserId: payeeId,
+    idempotencyKey: `${canonicalSeed}:payee:${payeeId}`,
+    type: 'PAYMENT_STATUS_UPDATED',
+    title: 'Course purchased - payout pending',
+    message: `${purchaserName} purchased ${courseTitle} (${amountDisplay}). Your payout will be processed by admin.`,
+    metadata: {
+      transactionId: String((tx as any)?._id || ''),
+      paymentIntentId: paymentIntentId || null,
+      bookingId: meta.bookingId || null,
+      courseId: meta.courseId || null,
+      schoolId: payeeType === 'school' ? payeeId : null,
+      teacherId: payeeType === 'teacher' ? payeeId : null,
+      amountCents,
+      amountDisplay,
+      currency,
+      purchaser: {
+        id: meta.userId || null,
+        name: purchaserName,
+        email: purchaserEmail,
+        role: String((purchaser as any)?.role || '')
+      },
+      course: {
+        title: courseTitle
+      },
+      deepLink
+    }
+  });
 }
 
 // ----------------------------- Invoice creation (canonical) -----------------------------
@@ -699,6 +833,62 @@ export async function handleInvoicePaid(rawInvoice: Stripe.Invoice) {
 
     // Apply booking/session/course effects
     await applyPurchaseEffectsFromMetadata(meta, (tx as any)._id);
+
+    try {
+      if (meta.userId) {
+        await notificationService.create({
+          recipientUserId: meta.userId,
+          type: 'COURSE_PURCHASED',
+          title: 'Course purchase successful',
+          message: 'Your course purchase has been confirmed.',
+          metadata: {
+            bookingId: meta.bookingId || null,
+            courseId: meta.courseId || null,
+            paymentIntentId: pi.id,
+            deepLink: '/student/notifications'
+          }
+        });
+      }
+
+      if ((tx as any).payee) {
+        const idempotencyBase = `purchase_paid:${
+          pi.id ||
+          invoice.id ||
+          meta.bookingId ||
+          meta.courseId ||
+          String((tx as any)?._id || '').trim() ||
+          'unknown'
+        }`;
+        await notifyPayeeOnPurchasePaid({
+          meta,
+          tx,
+          paymentIntentId: pi.id,
+          idempotencySeed: idempotencyBase
+        });
+      }
+    } catch (notificationError) {
+      Logger.error('Failed to create payment success notifications', notificationError);
+    }
+
+    try {
+      const idempotencyBase = `purchase_paid:${
+        pi.id ||
+        invoice.id ||
+        meta.bookingId ||
+        meta.courseId ||
+        String((tx as any)?._id || '').trim() ||
+        'unknown'
+      }`;
+      await notifyAdminsOnPurchasePaid({
+        meta,
+        tx,
+        paymentIntentId: pi.id,
+        invoiceId: invoice.id,
+        idempotencySeed: idempotencyBase
+      });
+    } catch (notificationError) {
+      Logger.error('Failed to create admin purchase notification', notificationError);
+    }
   }
 }
 
@@ -766,6 +956,25 @@ export async function handleInvoicePaymentFailed(rawInvoice: Stripe.Invoice) {
     }
   } catch {
     // ignore
+  }
+
+  try {
+    if (meta.userId) {
+      await notificationService.create({
+        recipientUserId: meta.userId,
+        type: 'PAYMENT_STATUS_UPDATED',
+        title: 'Payment failed',
+        message: 'A recent payment attempt failed. Please retry with another method.',
+        metadata: {
+          bookingId: meta.bookingId || null,
+          invoiceId: invoice.id,
+          paymentIntentId: piId || null,
+          deepLink: '/student/notifications'
+        }
+      });
+    }
+  } catch (notificationError) {
+    Logger.error('Failed to create payment failure notification', notificationError);
   }
 }
 
@@ -1139,15 +1348,13 @@ export async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent) {
     const existingPayout = await PayoutModel.findOne({ transaction: tx._id });
 
     // choose a safe default for payout status: use PENDING so admins can reconcile or send
-    const desiredStatus: 'PENDING' | 'SENT' | 'FAILED' | 'SETTLED' = 'PENDING';
-
     if (!existingPayout) {
       await PayoutModel.create({
         transaction: tx._id,
         invoice: inv?._id || null,
 
-        toUser: payoutReceiverId,
-        toType: payoutReceiverType,
+        toUser: payoutCtx.payee,
+        toType: payoutCtx.payeeType,
 
         amount,
         currency: pi.currency || 'usd',
@@ -1158,8 +1365,8 @@ export async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent) {
         status: 'PENDING',
 
         metadata: {
-          payoutReceiverType: payoutReceiverType,
-          payoutReceiverId: payoutReceiverId,
+          payoutReceiverType: payoutCtx.payeeType,
+          payoutReceiverId: payoutCtx.payee,
           school: payoutCtx.school,
           fromPaymentIntent: pi.id,
           raw: pi.metadata || {}
@@ -1190,6 +1397,58 @@ export async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent) {
     console.warn('Failed to create or update payout record', err);
   }
 
+  const meta = (pi.metadata || {}) as Record<string, string>;
+  try {
+    if (meta.userId) {
+      await notificationService.create({
+        recipientUserId: meta.userId,
+        type: 'COURSE_PURCHASED',
+        title: 'Course purchase successful',
+        message: 'Your payment was processed and enrollment is active.',
+        metadata: {
+          bookingId: meta.bookingId || null,
+          courseId: meta.courseId || null,
+          paymentIntentId: pi.id,
+          deepLink: '/student/notifications'
+        }
+      });
+    }
+  } catch (notificationError) {
+    Logger.error(
+      'Failed to create payment success notification for legacy flow',
+      notificationError
+    );
+  }
+
+  try {
+    const idempotencyBase = `purchase_paid:${
+      pi.id || meta.bookingId || meta.courseId || String((tx as any)?._id || '').trim() || 'unknown'
+    }`;
+    await notifyPayeeOnPurchasePaid({
+      meta,
+      tx,
+      paymentIntentId: pi.id,
+      idempotencySeed: idempotencyBase
+    });
+  } catch (notificationError) {
+    Logger.error('Failed to create payee purchase notification for legacy flow', notificationError);
+  }
+
+  try {
+    const idempotencyBase = `purchase_paid:${
+      pi.id || meta.bookingId || meta.courseId || String((tx as any)?._id || '').trim() || 'unknown'
+    }`;
+    await notifyAdminsOnPurchasePaid({
+      meta,
+      tx,
+      paymentIntentId: pi.id,
+      invoiceId: null,
+      idempotencySeed: idempotencyBase
+    });
+  } catch (notificationError) {
+    Logger.error('Failed to create admin purchase notification for legacy flow', notificationError);
+  }
+
   return;
 }
 
@@ -1198,6 +1457,7 @@ export async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent) {
  */
 export async function handlePaymentIntentFailed(pi: Stripe.PaymentIntent) {
   const t = await TransactionModel.findOne({ stripePaymentIntentId: pi.id });
+  const meta = (pi.metadata || {}) as Record<string, string>;
   if (t) {
     t.status = 'FAILED';
     t.failureReason = (pi as any).last_payment_error?.message || 'Payment failed';
@@ -1216,6 +1476,24 @@ export async function handlePaymentIntentFailed(pi: Stripe.PaymentIntent) {
     } catch (err) {
       console.warn('Failed to update booking on payment failure', err);
     }
+  }
+
+  try {
+    if (meta.userId) {
+      await notificationService.create({
+        recipientUserId: meta.userId,
+        type: 'PAYMENT_STATUS_UPDATED',
+        title: 'Payment failed',
+        message: 'A payment attempt failed. Please try again.',
+        metadata: {
+          bookingId: meta.bookingId || null,
+          paymentIntentId: pi.id,
+          deepLink: '/student/notifications'
+        }
+      });
+    }
+  } catch (notificationError) {
+    Logger.error('Failed to create payment failed notification', notificationError);
   }
 }
 
@@ -1299,18 +1577,48 @@ export async function createTransferToConnectedAccount({
     await tx.save();
   }
 
-  const payout = await PayoutModel.create({
-    transaction: transactionId,
-    toUser: tx?.payee || null,
-    toAccountId,
-    amount,
-    currency,
-    platformFee: tx?.platformFee || 0,
-    netAmount: amount,
-    stripeTransferId: transfer.id,
-    status: 'SENT',
-    metadata
-  });
+  const payout = await PayoutModel.findOneAndUpdate(
+    { transaction: transactionId },
+    {
+      $setOnInsert: {
+        transaction: transactionId,
+        toUser: tx?.payee || null,
+        amount,
+        currency,
+        platformFee: tx?.platformFee || 0,
+        netAmount: amount
+      },
+      $set: {
+        toAccountId,
+        stripeTransferId: transfer.id,
+        status: 'SENT',
+        metadata,
+        updatedAt: new Date()
+      }
+    },
+    { new: true, upsert: true }
+  );
+
+  try {
+    if (tx?.payee) {
+      const payoutTargetPath =
+        tx?.payeeType === 'school' ? '/school/notifications' : '/teacher/notifications';
+      await notificationService.create({
+        recipientUserId: String(tx.payee),
+        type: 'PAYMENT_STATUS_UPDATED',
+        title: 'Payout sent',
+        message: 'Your payout has been sent by HelloK12 admin.',
+        metadata: {
+          transactionId: String(transactionId),
+          payoutId: String((payout as any)?._id || ''),
+          transferId: transfer.id,
+          deepLink: payoutTargetPath
+        }
+      });
+    }
+  } catch (notificationError) {
+    Logger.error('Failed to create payout sent notification', notificationError);
+  }
 
   return { transfer, payout };
 }

@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { teachersStudentsInvitationController } from './manageTeachersStudents.controller';
 import { authenticate, authorize } from '../../middlewares/auth';
 import { USER_ROLES } from '../../utils/constants';
+import { validateRequest } from '../../middlewares/validation';
+import { sendTeacherNotificationSchema } from './manageTeachersStudents.schemas';
 
 const router = Router();
 
@@ -58,6 +60,14 @@ router.post(
   authenticate,
   authorize([USER_ROLES.SCHOOL, USER_ROLES.SUPER_ADMIN]),
   teachersStudentsInvitationController.approveRejectTeacher
+);
+
+router.post(
+  '/teachers/:teacherId/notifications',
+  authenticate,
+  authorize([USER_ROLES.SCHOOL, USER_ROLES.SUPER_ADMIN]),
+  validateRequest(sendTeacherNotificationSchema),
+  teachersStudentsInvitationController.sendTeacherNotification
 );
 
 router.get(

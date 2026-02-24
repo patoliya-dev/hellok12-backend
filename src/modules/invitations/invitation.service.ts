@@ -6,6 +6,8 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { throwHttp } from '../../utils/httpError';
 import { Types } from 'mongoose';
+import { notificationService } from '../notifications/notification.service';
+import Logger from '../../utils/winstonLogger.utils';
 
 type AcceptPayload = {
   inviteId: string;
@@ -205,6 +207,35 @@ export const InvitationService = {
     inv.status = 'accepted';
     inv.acceptedAt = new Date();
     await inv.save();
+
+    try {
+      await notificationService.createManyForUsers([String(user._id), String(inv.invitedBy)], {
+        type: 'INVITATION_ACCEPTED',
+        title: 'Invitation accepted',
+        message: user.name + ' accepted the invitation.',
+        metadata: {
+          invitationId: String(inv._id),
+          acceptedBy: String(user._id),
+          recipientRole: user.role,
+          deepLink: '/' + (user.role === 'super_admin' ? 'admin' : user.role) + '/notifications'
+        }
+      });
+
+      if (recipientRole === 'teacher' && user.school) {
+        await notificationService.create({
+          recipientUserId: String(user._id),
+          type: 'TEACHER_ASSIGNED',
+          title: 'School assigned',
+          message: 'You are now linked to a school account.',
+          metadata: {
+            schoolId: String(user.school),
+            deepLink: '/teacher/notifications'
+          }
+        });
+      }
+    } catch (notificationError) {
+      Logger.error('Failed to create invitation acceptance notifications', notificationError);
+    }
 
     const accessToken = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET!, {
       expiresIn: '7d'

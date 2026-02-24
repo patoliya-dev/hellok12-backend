@@ -18,6 +18,10 @@ import { CoursesListResponse, LessonListResponse, LessonViewType } from '../../t
 import { normalizeTimezone } from './lesson.util';
 import { recomputeCourseTeachers } from '../courses/course.helper';
 import { User } from '../../models/user.model';
+import { notificationService } from '../notifications/notification.service';
+import Logger from '../../utils/winstonLogger.utils';
+import { Lesson } from '../../models/lesson.model';
+import { buildLessonDiff } from '../notifications/notificationDiff.util';
 
 const getPaidEnrollmentStudentIds = async (courseId: Types.ObjectId) => {
   const paidEnrollments = await bookingModel
@@ -110,6 +114,19 @@ export const createLesson = async (req: Request, res: Response) => {
 
     const course = await CourseService.getById(courseId);
 
+    try {
+      await notificationService.notifyLessonLifecycle({
+        event: 'LESSON_SCHEDULED',
+        actorUserId: req.user?.id,
+        courseId: String(created.courseId),
+        teacherId: String(created.teacherId),
+        lessonId: String((created as any)._id || created.id),
+        title: String(created.title || '')
+      });
+    } catch (notificationError) {
+      Logger.error('Failed to create lesson schedule notifications', notificationError);
+    }
+
     if (course?.mode === 'in-person') {
       return res.status(201).json(createSuccessResponse({ created }, 'Created', 201));
     }
@@ -138,6 +155,7 @@ export const updateLesson = async (req: Request, res: Response) => {
     return res.status(422).json(createErrorResponse(parsed.error.message, 'Validation Error', 422));
   }
   try {
+    const beforeLesson = await Lesson.findById(req.params.id).lean();
     const { courseId, teacherId, ...rest } = parsed.data;
 
     // Separate schedule from other fields to avoid spreading a schedule with a string date
@@ -165,6 +183,23 @@ export const updateLesson = async (req: Request, res: Response) => {
     const updated = await LessonService.update(req.params.id, payload, timezone);
     if (!updated)
       return res.status(404).json(createErrorResponse('Lesson not found', 'Not found', 404));
+    try {
+      const diff = buildLessonDiff(beforeLesson, updated, timezone);
+      await notificationService.notifyLessonLifecycle({
+        event: 'LESSON_UPDATED',
+        actorUserId: req.user?.id,
+        actorRole: req.user?.role,
+        courseId: String((updated as any).courseId),
+        teacherId: String((updated as any).teacherId),
+        lessonId: String((updated as any)._id || req.params.id),
+        title: String((updated as any).title || ''),
+        diff,
+        changedAt: new Date().toISOString()
+      });
+    } catch (notificationError) {
+      Logger.error('Failed to create lesson update notifications', notificationError);
+    }
+
     return res.json(createSuccessResponse(updated, 'Updated'));
   } catch (e: any) {
     if (e?.message === 'TRIAL_EXISTS') {
@@ -186,6 +221,19 @@ export const deleteLesson = async (req: Request, res: Response) => {
     const removed = await LessonService.remove(req.params.id);
     if (!removed)
       return res.status(404).json(createErrorResponse('Lesson not found', 'Not found', 404));
+    try {
+      await notificationService.notifyLessonLifecycle({
+        event: 'LESSON_CANCELLED',
+        actorUserId: req.user?.id,
+        courseId: String((removed as any).courseId),
+        teacherId: String((removed as any).teacherId),
+        lessonId: String((removed as any)._id || req.params.id),
+        title: String((removed as any).title || '')
+      });
+    } catch (notificationError) {
+      Logger.error('Failed to create lesson cancellation notifications', notificationError);
+    }
+
     return res.json(createSuccessResponse(removed, 'Deleted'));
   } catch (e: any) {
     if (e?.statusCode === 409 || e?.code === '409_CONFLICT_OVERLAP') {
@@ -292,6 +340,23 @@ export const bulkCreateForCourse = async (req: Request, res: Response) => {
       session: sessions[index]
     }));
 
+    try {
+      await Promise.all(
+        result.items.map((lesson: any) =>
+          notificationService.notifyLessonLifecycle({
+            event: 'LESSON_SCHEDULED',
+            actorUserId: req.user?.id,
+            courseId: String(lesson.courseId),
+            teacherId: String(lesson.teacherId),
+            lessonId: String(lesson._id),
+            title: String(lesson.title || '')
+          })
+        )
+      );
+    } catch (notificationError) {
+      Logger.error('Failed to create bulk lesson schedule notifications', notificationError);
+    }
+
     return res
       .status(201)
       .json(createSuccessResponse(resultWithSessions, 'Lessons created successfully', 201));
@@ -323,6 +388,28 @@ export const bulkUpdateForCourse = async (req: Request, res: Response) => {
     const courseId = new Types.ObjectId(req.params.courseId);
     const updates = req.body.updates || [];
     const deletes = req.body.deletes || [];
+    const updatedLessonIds = updates
+      .map((item: any) => String(item?.lessonId || ''))
+      .filter((id: string) => Types.ObjectId.isValid(id))
+      .map((id: string) => new Types.ObjectId(id));
+    const beforeUpdatedLessons = updatedLessonIds.length
+      ? await Lesson.find({ _id: { $in: updatedLessonIds }, courseId }).lean()
+      : [];
+    const beforeUpdatedLessonsMap = new Map(
+      beforeUpdatedLessons.map((row: any) => [String(row._id), row])
+    );
+    const deletedLessonRows = deletes?.length
+      ? await Lesson.find({
+          _id: {
+            $in: deletes
+              .filter((id: string) => Types.ObjectId.isValid(id))
+              .map((id: string) => new Types.ObjectId(id))
+          },
+          courseId
+        })
+          .select('_id teacherId title')
+          .lean()
+      : [];
     const rawTz = req.userTimezone || 'UTC';
     const timeZone = normalizeTimezone(rawTz);
     const result = await LessonService.bulkUpdateForCourse({
@@ -333,6 +420,50 @@ export const bulkUpdateForCourse = async (req: Request, res: Response) => {
     });
 
     await recomputeCourseTeachers(courseId);
+
+    try {
+      const updatedLessonMap = new Map(
+        (result?.items || []).map((item: any) => [String(item._id), item])
+      );
+
+      await Promise.all(
+        updates.map((update: any) => {
+          const lesson = updatedLessonMap.get(String(update.lessonId));
+          if (!lesson) return Promise.resolve();
+          return notificationService.notifyLessonLifecycle({
+            event: 'LESSON_UPDATED',
+            actorUserId: req.user?.id,
+            actorRole: req.user?.role,
+            courseId: String(lesson.courseId || courseId),
+            teacherId: String(lesson.teacherId || ''),
+            lessonId: String(lesson._id),
+            title: String(lesson.title || ''),
+            diff: buildLessonDiff(
+              beforeUpdatedLessonsMap.get(String(update.lessonId)),
+              lesson,
+              timeZone
+            ),
+            changedAt: new Date().toISOString()
+          });
+        })
+      );
+
+      await Promise.all(
+        deletedLessonRows.map((lesson: any) =>
+          notificationService.notifyLessonLifecycle({
+            event: 'LESSON_CANCELLED',
+            actorUserId: req.user?.id,
+            courseId: String(courseId),
+            teacherId: String(lesson.teacherId || ''),
+            lessonId: String(lesson._id),
+            title: String(lesson.title || '')
+          })
+        )
+      );
+    } catch (notificationError) {
+      Logger.error('Failed to create bulk lesson update notifications', notificationError);
+    }
+
     return res.status(200).json(createSuccessResponse(result, 'Lessons updated', 200));
   } catch (err: any) {
     switch (err.code) {

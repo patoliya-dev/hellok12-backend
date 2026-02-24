@@ -5,6 +5,8 @@ import { ParentProfileModel } from '../../models/parentProfile.model';
 import { Course } from '../../models/course.model';
 import bookingModel from '../../models/booking.model';
 import { SchoolProfileModel } from '../../models/schoolProfile.model';
+import { notificationService } from '../notifications/notification.service';
+import Logger from '../../utils/winstonLogger.utils';
 
 const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -703,6 +705,14 @@ export const AdminService = {
       user.phone = String(userPatch.phone).trim();
     }
 
+    const previousStatus = user.status;
+    if (payload?.status !== undefined) {
+      const normalizedStatus = String(payload.status).trim().toLowerCase();
+      if (['pending', 'active', 'suspended', 'inactive'].includes(normalizedStatus)) {
+        user.status = normalizedStatus as any;
+      }
+    }
+
     // Allow school change only for students
     if (payload?.school !== undefined && user.role === 'student') {
       if (payload.school && Types.ObjectId.isValid(String(payload.school))) {
@@ -808,6 +818,24 @@ export const AdminService = {
     }
 
     await user.save();
+
+    if (previousStatus !== user.status && ['school', 'teacher'].includes(user.role)) {
+      try {
+        await notificationService.create({
+          recipientUserId: String(user._id),
+          type: 'ADMIN_ACTION',
+          title: 'Account status updated',
+          message: `Your account status was changed to ${user.status}.`,
+          metadata: {
+            role: user.role,
+            status: user.status,
+            deepLink: user.role === 'school' ? '/school/notifications' : '/teacher/notifications'
+          }
+        });
+      } catch (notificationError) {
+        Logger.error('Failed to create admin action notification', notificationError);
+      }
+    }
 
     return {
       _id: user._id,

@@ -11,6 +11,26 @@ import { User } from '../../models/user.model';
 import { ParentProfileModel } from '../../models/parentProfile.model';
 import { canPurchaseCourseRun } from '../bookings/entitlement.util';
 
+function toUtcDateKey(input: Date | string | null | undefined): string | null {
+  if (!input) return null;
+  const d = input instanceof Date ? input : new Date(input);
+  if (Number.isNaN(d.getTime())) return null;
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function dateKeyToUtcStart(key: string | null): Date | null {
+  if (!key) return null;
+  return new Date(`${key}T00:00:00.000Z`);
+}
+
+function dateKeyToUtcEnd(key: string | null): Date | null {
+  if (!key) return null;
+  return new Date(`${key}T23:59:59.999Z`);
+}
+
 function sanitizeCourseAddress(input: any, mergedMode: string, mergedLessonType: string) {
   const needs = mergedMode === COURSE_MODE.IN_PERSON && mergedLessonType === LESSON_TYPES.GROUP;
   if (!needs) return null;
@@ -52,16 +72,11 @@ export const CourseService = {
     owner: { role: 'school' | 'teacher'; id: string },
     timezone: string = 'UTC'
   ) {
-    const tz = timezone || 'UTC';
-
-    const startDateUtc = DateTime.fromJSDate(data.startDate, { zone: tz })
-      .startOf('day')
-      .toUTC()
-      .toJSDate();
-
-    const endDateUtc = data.endDate
-      ? DateTime.fromJSDate(data.endDate, { zone: tz }).endOf('day').toUTC().toJSDate()
-      : null;
+    const startDateUtc = dateKeyToUtcStart(toUtcDateKey(data.startDate));
+    const endDateUtc = dateKeyToUtcEnd(toUtcDateKey(data.endDate ?? null));
+    if (!startDateUtc) {
+      throw Object.assign(new Error('Invalid startDate'), { statusCode: 422 });
+    }
 
     const payload: Partial<CourseDoc> = {
       title: data.title,
@@ -107,19 +122,21 @@ export const CourseService = {
       filter.ownerId = new Types.ObjectId(owner.id);
     }
 
-    const tz = timezone || 'UTC';
-    const $set: any = { ...data };
+    const { startDate, endDate, ...rest } = data;
+    const $set: any = { ...rest };
 
-    if (data.startDate) {
-      $set.startDate = DateTime.fromJSDate(data.startDate, { zone: tz })
-        .startOf('day')
-        .toUTC()
-        .toJSDate();
+    if (startDate && toUtcDateKey(startDate) !== toUtcDateKey(current.startDate)) {
+      const normalizedStart = dateKeyToUtcStart(toUtcDateKey(startDate));
+      if (normalizedStart) {
+        $set.startDate = normalizedStart;
+      }
     }
-    if (data.endDate !== undefined) {
-      $set.endDate = data.endDate
-        ? DateTime.fromJSDate(data.endDate, { zone: tz }).endOf('day').toUTC().toJSDate()
-        : null;
+    if (endDate !== undefined) {
+      const currentEndDateKey = toUtcDateKey(current.endDate ?? null);
+      const nextEndDateKey = toUtcDateKey(endDate ?? null);
+      if (nextEndDateKey !== currentEndDateKey) {
+        $set.endDate = endDate ? dateKeyToUtcEnd(nextEndDateKey) : null;
+      }
     }
 
     const nextMode = data.mode ?? current.mode;

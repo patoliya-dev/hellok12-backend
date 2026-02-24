@@ -52,7 +52,13 @@ export async function extractPayoutContext(meta: Record<string, string>): Promis
   // Infer school from teacher profile if teacherId exists
   if (payee) {
     const teacher = await User.findById(payee).select({ school: 1 }).lean();
-    if (teacher?.school) school = String(teacher.school);
+    if (teacher?.school) {
+      // School teacher payout is handled by school manually.
+      // Platform payout target should be the school, not school teacher.
+      school = String(teacher.school);
+      payeeType = 'school';
+      payee = school;
+    }
   }
 
   // Fallback infer school from course ownership

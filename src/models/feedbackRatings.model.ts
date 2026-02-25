@@ -101,11 +101,3 @@ export type FeedbackRatingQuery = {
   rating?: number | { $gte?: number; $lte?: number };
   createdAt?: { $gte?: Date; $lte?: Date };
 };
-
-// Helper function for creating feedback
-export const createFeedbackRating = async (
-  data: Omit<IFeedbackRating, keyof Document | 'createdAt' | 'updatedAt'>
-): Promise<IFeedbackRating> => {
-  const feedback = new FeedbackRating(data);
-  return await feedback.save();
-};

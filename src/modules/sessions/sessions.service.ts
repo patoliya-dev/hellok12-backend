@@ -4,6 +4,25 @@ import { Lesson } from '../../models/lesson.model';
 import zoomService from './zoom.service';
 import Logger from '../../utils/winstonLogger.utils';
 
+const toBoundedInt = (value: string | undefined, fallback: number, min: number, max: number) => {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, Math.trunc(n)));
+};
+
+const COMPLETE_WINDOW_BEFORE_MINUTES = toBoundedInt(
+  process.env.SESSION_COMPLETE_WINDOW_BEFORE_MINUTES,
+  30,
+  0,
+  24 * 60
+);
+const COMPLETE_WINDOW_AFTER_MINUTES = toBoundedInt(
+  process.env.SESSION_COMPLETE_WINDOW_AFTER_MINUTES,
+  12 * 60,
+  0,
+  7 * 24 * 60
+);
+
 const sessionService = {
   /**
    * Create a session for a lesson with Zoom meeting
@@ -234,6 +253,83 @@ const sessionService = {
       Logger.error('Error deleting session:', error);
       throw error;
     }
+  },
+
+  completeSessionByTeacher: async (args: {
+    sessionId: string;
+    teacherId: string;
+    note?: string;
+  }) => {
+    const { sessionId, teacherId, note } = args;
+
+    const session = await SessionModel.findById(sessionId)
+      .select('_id teacher status start end completedAt completedBy completionNote')
+      .lean();
+
+    if (!session) {
+      throw Object.assign(new Error('Session not found'), { statusCode: 404 });
+    }
+
+    if (String(session.teacher) !== String(teacherId)) {
+      throw Object.assign(new Error('Forbidden: session does not belong to this teacher'), {
+        statusCode: 403
+      });
+    }
+
+    if (session.status === SessionStatus.CANCELLED) {
+      throw Object.assign(new Error('Cancelled sessions cannot be marked as completed'), {
+        statusCode: 409
+      });
+    }
+
+    if (session.status === SessionStatus.COMPLETED) {
+      return { session, alreadyCompleted: true };
+    }
+
+    const now = new Date();
+    const windowStart = new Date(
+      session.start.getTime() - COMPLETE_WINDOW_BEFORE_MINUTES * 60 * 1000
+    );
+    const windowEnd = new Date(session.end.getTime() + COMPLETE_WINDOW_AFTER_MINUTES * 60 * 1000);
+
+    if (now < windowStart || now > windowEnd) {
+      throw Object.assign(
+        new Error(
+          `Session can only be completed from ${windowStart.toISOString()} to ${windowEnd.toISOString()}`
+        ),
+        { statusCode: 409 }
+      );
+    }
+
+    const updated = await SessionModel.findOneAndUpdate(
+      {
+        _id: session._id,
+        teacher: session.teacher,
+        status: { $in: [SessionStatus.SCHEDULED, SessionStatus.IN_PROGRESS] }
+      },
+      {
+        $set: {
+          status: SessionStatus.COMPLETED,
+          completedAt: now,
+          completedBy: session.teacher,
+          ...(typeof note === 'string' ? { completionNote: note.trim() } : {})
+        }
+      },
+      { new: true }
+    ).lean();
+
+    if (!updated) {
+      const latest = await SessionModel.findById(session._id)
+        .select('_id teacher status start end completedAt completedBy completionNote')
+        .lean();
+      if (latest?.status === SessionStatus.COMPLETED) {
+        return { session: latest, alreadyCompleted: true };
+      }
+
+      throw Object.assign(new Error('Session is not in a completable state'), { statusCode: 409 });
+    }
+
+    return { session: updated, alreadyCompleted: false };
   }
 };
 

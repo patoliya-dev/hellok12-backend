@@ -429,7 +429,10 @@ export const LessonService = {
     const r = String(role || '').toLowerCase();
 
     // Build filter depending on role
-    const filter: any = { start: { $gte: start, $lt: end } };
+    const filter: any = {
+      start: { $gte: start, $lt: end },
+      status: { $in: [SessionStatus.SCHEDULED, SessionStatus.IN_PROGRESS] }
+    };
 
     if (r === 'teacher') {
       filter.teacher = new Types.ObjectId(userId);
@@ -1120,11 +1123,12 @@ export const LessonService = {
 
     const skip = (opts.page - 1) * opts.limit;
 
-    // Correct upcoming query: start >= now
+    // Upcoming should include sessions that already started but not ended yet.
     // Correct students filter: $in [ObjectId]
     const sessions = await SessionModel.find({
       students: { $in: [studentObjId] },
-      start: { $gte: nowUtc.toJSDate(), $lt: endUtc.toJSDate() },
+      end: { $gte: nowUtc.toJSDate() },
+      start: { $lt: endUtc.toJSDate() },
       // Optional: only upcoming-like statuses (if your schema uses them)
       status: { $in: [SessionStatus.SCHEDULED, SessionStatus.IN_PROGRESS] }
     })
@@ -1338,14 +1342,17 @@ export const LessonService = {
     const skip = (page - 1) * limit;
 
     const filters: any = {
-      students: new Types.ObjectId(studentId),
-      status: { $ne: SessionStatus.CANCELLED }
+      students: new Types.ObjectId(studentId)
     };
 
     if (courseId) filters.course = new Types.ObjectId(courseId);
 
-    if (view === LessonViewType.UPCOMING) filters.end = { $gte: now };
-    else filters.end = { $lt: now };
+    if (view === LessonViewType.UPCOMING) {
+      filters.status = { $in: [SessionStatus.SCHEDULED, SessionStatus.IN_PROGRESS] };
+      filters.end = { $gte: now };
+    } else {
+      filters.status = { $in: [SessionStatus.COMPLETED, SessionStatus.CANCELLED] };
+    }
 
     const totalItems = await SessionModel.countDocuments(filters);
 
@@ -1506,7 +1513,7 @@ export const LessonService = {
     const sessionFilter: any = {
       end: { $gte: now },
       start: { $lt: windowEnd },
-      status: { $ne: SessionStatus.CANCELLED }
+      status: { $in: [SessionStatus.SCHEDULED, SessionStatus.IN_PROGRESS] }
     };
 
     // 3) Active course constraint
@@ -1631,16 +1638,14 @@ export const LessonService = {
 
     // 2) Session filters
     const filters: any = {
-      course: { $in: courseIds },
-      status: { $ne: SessionStatus.CANCELLED }
+      course: { $in: courseIds }
     };
 
-    // IMPORTANT REQUIREMENT you mentioned earlier:
-    // upcoming should include until lesson END time (not just start)
     if (view === LessonViewType.UPCOMING) {
-      filters.end = { $gte: now }; // ✅ session stays "upcoming" until it ends
+      filters.status = { $in: [SessionStatus.SCHEDULED, SessionStatus.IN_PROGRESS] };
+      filters.end = { $gte: now };
     } else {
-      filters.end = { $lt: now };
+      filters.status = { $in: [SessionStatus.COMPLETED, SessionStatus.CANCELLED] };
     }
 
     if (status && status !== 'all') {

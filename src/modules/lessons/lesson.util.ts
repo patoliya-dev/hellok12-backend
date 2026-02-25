@@ -119,14 +119,6 @@ export async function parseStartEnd(
   return { startAt: startUtc, endAt: endUtc };
 }
 
-/** Helper: parse "HH:MM AM/PM" into 24h hours/minutes */
-export function parseHHMM(hhmm: string) {
-  const [hhStr, mmStr] = hhmm.split(':');
-  const hours = Number(hhStr);
-  const minutes = Number(mmStr);
-  return { hours, minutes };
-}
-
 /**
  * Given an ISO date string or undefined and a timeZone, return UTC start/end instants for that day.
  * - isoDate can be YYYY-MM-DD (local date) or ISO instant. If undefined, uses now (in timezone).

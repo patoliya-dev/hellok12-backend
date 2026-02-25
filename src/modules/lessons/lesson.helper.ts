@@ -51,28 +51,3 @@ export const buildDateFilter = (startDate?: string, endDate?: string) => {
 
   return filter;
 };
-
-export const buildSortConfig = (sortBy: string, sortOrder: 'asc' | 'desc') => {
-  const order = sortOrder === 'asc' ? 1 : -1;
-  const sortConfig: any = {};
-
-  switch (sortBy) {
-    case 'dateTime':
-      sortConfig.start = order;
-      break;
-    case 'student':
-      sortConfig['studentData.0.name'] = order;
-      break;
-    case 'status':
-      sortConfig.status = order;
-      sortConfig.start = -1; // Secondary sort by date
-      break;
-    case 'subject':
-      sortConfig.courseName = order;
-      break;
-    default:
-      sortConfig.start = -1;
-  }
-
-  return sortConfig;
-};

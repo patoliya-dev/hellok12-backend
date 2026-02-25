@@ -88,17 +88,3 @@ export const userConnectionHelper = (socket: Socket, io: Server) => {
     }
   });
 };
-
-/**
- * Get socket ID for a user
- */
-export const getUserSocketId = (userId: string): string | undefined => {
-  return userSocketMap.get(userId);
-};
-
-/**
- * Check if user is online
- */
-export const isUserOnline = (userId: string): boolean => {
-  return userSocketMap.has(userId);
-};

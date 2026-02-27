@@ -727,6 +727,7 @@ export async function handleInvoicePaid(rawInvoice: Stripe.Invoice) {
         amountDisplay,
         currency,
         status: 'SUCCEEDED',
+        paidAt: new Date(),
 
         stripeInvoiceId: invoice.id,
         stripePaymentIntentId: pi.id,
@@ -1151,6 +1152,7 @@ export async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent) {
       amountDisplay,
       currency: pi.currency || 'usd',
       status: 'SUCCEEDED',
+      paidAt: new Date(),
 
       stripePaymentIntentId: pi.id,
       stripeChargeId: chargeId,
@@ -1167,6 +1169,7 @@ export async function handlePaymentIntentSucceeded(pi: Stripe.PaymentIntent) {
     });
   } else {
     tx.status = 'SUCCEEDED';
+    tx.paidAt = tx.paidAt || new Date();
     tx.stripeChargeId = chargeId || tx.stripeChargeId;
     tx.stripeInvoiceId = stripeInvoiceId || tx.stripeInvoiceId;
     tx.platformFee = platformFee || tx.platformFee;

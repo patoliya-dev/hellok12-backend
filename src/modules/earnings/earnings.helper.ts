@@ -1,5 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 
+/**
+ * Validates query params used by earnings list and payout-after-commission screens.
+ * This keeps filtering predictable and prevents expensive malformed DB scans.
+ */
 export const validatePayoutQuery = (req: Request, res: Response, next: NextFunction) => {
   const errors: string[] = [];
 
@@ -11,19 +15,44 @@ export const validatePayoutQuery = (req: Request, res: Response, next: NextFunct
     }
   }
 
-  // Validate payment status
-  if (req.query.paymentStatus) {
-    const validStatuses = ['PENDING', 'SENT', 'FAILED', 'SETTLED'];
-    if (!validStatuses.includes(req.query.paymentStatus as string)) {
+  // Validate transaction/payment status
+  if (req.query.status) {
+    const validStatuses = [
+      'PAID',
+      'SENT',
+      'SETTLED',
+      'SUCCEEDED',
+      'COMPLETED',
+      'PENDING',
+      'PROCESSING',
+      'FAILED',
+      'REFUNDED'
+    ];
+    if (!validStatuses.includes(String(req.query.status).toUpperCase())) {
       errors.push('Invalid payment status');
     }
   }
 
-  // Validate amount range
-  if (req.query.amountRange) {
-    const validRanges = ['0-50', '50-100', '100-150', '150-200'];
-    if (!validRanges.includes(req.query.amountRange as string)) {
-      errors.push('Invalid amount range');
+  // Validate min/max amount
+  if (req.query.minAmount !== undefined) {
+    const minAmount = Number(req.query.minAmount);
+    if (Number.isNaN(minAmount) || minAmount < 0) {
+      errors.push('minAmount must be a non-negative number');
+    }
+  }
+
+  if (req.query.maxAmount !== undefined) {
+    const maxAmount = Number(req.query.maxAmount);
+    if (Number.isNaN(maxAmount) || maxAmount < 0) {
+      errors.push('maxAmount must be a non-negative number');
+    }
+  }
+
+  if (req.query.minAmount !== undefined && req.query.maxAmount !== undefined) {
+    const minAmount = Number(req.query.minAmount);
+    const maxAmount = Number(req.query.maxAmount);
+    if (!Number.isNaN(minAmount) && !Number.isNaN(maxAmount) && maxAmount < minAmount) {
+      errors.push('maxAmount must be greater than or equal to minAmount');
     }
   }
 
@@ -39,6 +68,14 @@ export const validatePayoutQuery = (req: Request, res: Response, next: NextFunct
     const endDate = new Date(req.query.endDate as string);
     if (isNaN(endDate.getTime())) {
       errors.push('Invalid end date format');
+    }
+  }
+
+  if (req.query.startDate && req.query.endDate) {
+    const startDate = new Date(req.query.startDate as string);
+    const endDate = new Date(req.query.endDate as string);
+    if (!isNaN(startDate.getTime()) && !isNaN(endDate.getTime()) && endDate < startDate) {
+      errors.push('endDate must be greater than or equal to startDate');
     }
   }
 
@@ -62,6 +99,13 @@ export const validatePayoutQuery = (req: Request, res: Response, next: NextFunct
     const validSortOrders = ['asc', 'desc'];
     if (!validSortOrders.includes(req.query.sortOrder as string)) {
       errors.push('Sort order must be "asc" or "desc"');
+    }
+  }
+
+  if (req.query.sortBy) {
+    const validSortBy = ['date', 'createdAt', 'amount', 'description', 'lessonService'];
+    if (!validSortBy.includes(String(req.query.sortBy))) {
+      errors.push('Invalid sortBy field');
     }
   }
 

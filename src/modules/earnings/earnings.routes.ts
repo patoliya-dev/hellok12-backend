@@ -1,5 +1,5 @@
 import express from 'express';
-import { EarningsController } from './earnings.controller';
+import { EarningsControllerV2 } from './earnings.controller';
 import { authenticate, authorize } from '../../middlewares/auth';
 import { USER_ROLES } from '../../utils/constants';
 import { validatePayoutQuery } from './earnings.helper';
@@ -11,14 +11,21 @@ router.get(
   '/summary',
   authenticate,
   authorize([USER_ROLES.TEACHER, USER_ROLES.SCHOOL]),
-  EarningsController.getSummary
+  EarningsControllerV2.getSummary
+);
+
+router.get(
+  '/graph',
+  authenticate,
+  authorize([USER_ROLES.TEACHER, USER_ROLES.SCHOOL]),
+  EarningsControllerV2.getGraph
 );
 
 router.get(
   '/trend',
   authenticate,
   authorize([USER_ROLES.TEACHER, USER_ROLES.SCHOOL]),
-  EarningsController.getTrend
+  EarningsControllerV2.getTrend
 );
 
 router.get(
@@ -26,14 +33,14 @@ router.get(
   authenticate,
   authorize([USER_ROLES.TEACHER, USER_ROLES.SCHOOL]),
   validatePayoutQuery,
-  EarningsController.listPayouts
+  EarningsControllerV2.listEarnings
 );
 
 router.get(
   '/earnings-commission',
   authenticate,
   authorize([USER_ROLES.TEACHER, USER_ROLES.SCHOOL]),
-  EarningsController.getPayoutAfterCommission
+  EarningsControllerV2.getPayoutAfterCommission
 );
 
 export default router;

@@ -3,6 +3,11 @@ import { AuthenticatedRequest } from '../middlewares/auth';
 import { createErrorResponse } from '../utils/apiResponse';
 import { USER_ROLES } from '../utils/constants';
 
+/**
+ * Central RBAC middleware factory.
+ * Keep role failures explicit (401 vs 403) so frontend can distinguish
+ * unauthenticated users from authenticated-but-forbidden users.
+ */
 export const requireRole = (allowedRoles: string[]) => {
   return (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
     if (!req.user) {

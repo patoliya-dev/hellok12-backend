@@ -510,6 +510,50 @@ const createEnhancedFallbackTemplate = (templateName: string, context: TemplateC
             </div>
         ${footer}`;
 
+    case 'parent-invitation':
+      return `${baseStyle}
+            <div class="title">👨‍👩‍👧 You're Invited to Join HelloK12!</div>
+            <div class="greeting">Dear Parent/Guardian,</div>
+
+    <div class="message">
+      <p><strong>${context.schoolName}</strong> has invited you to join HelloK12 as a parent/guardian.</p>
+
+      <div class="info-box">
+        <p><strong>📨 Message from ${context.schoolName}:</strong></p>
+        <p style="font-style: italic; color: #555;">
+          ${context.message || 'We are excited to have you join our learning community!'}
+        </p>
+      </div>
+
+      <p>As a parent on HelloK12, you’ll be able to:</p>
+      <ul>
+        <li>👀 View your child’s learning progress</li>
+        <li>📅 Track lessons and schedules</li>
+        <li>💬 Communicate with teachers/school</li>
+        <li>📚 Support your child’s courses and activities</li>
+        <li>🔔 Receive important school updates</li>
+      </ul>
+    </div>
+
+    <div class="cta-section">
+      <a href="${context.inviteLink}" class="cta-button">
+        ✅ Accept Invite
+      </a>
+    </div>
+
+    <div class="highlight">
+      <p><strong>⏰ Important:</strong> This invitation link will expire in 7 days.</p>
+      <p>If you don't have a HelloK12 account yet, you'll be able to create one when you accept the invitation.</p>
+    </div>
+
+    <div style="margin-top: 30px; padding-top: 20px; border-top: 2px solid #f0f0f0; text-align: center; color: #7f8c8d;">
+      <p style="font-size: 13px;">If the button doesn't work, copy and paste this link into your browser:</p>
+      <p style="font-size: 12px; word-break: break-all; color: #667eea; background-color: #f8f9fa; padding: 10px; border-radius: 4px; margin: 10px 0;">
+        ${context.inviteLink}
+      </p>
+    </div>
+  ${footer}`;
+
     default:
       return `${baseStyle}
                 <div class="title">📧 HelloK12 Notification</div>
@@ -713,6 +757,29 @@ export const emailService = {
       Logger.info(`Student invitation sent to ${to} from ${schoolName}`);
     } catch (error) {
       Logger.error('Failed to send student invitation:', error);
+      throw error;
+    }
+  },
+
+  sendParentInvitation: async (
+    to: string,
+    schoolName: string,
+    inviteLink: string,
+    message: string = ''
+  ) => {
+    try {
+      const html = compileTemplate('parent-invitation', {
+        schoolName,
+        message,
+        inviteLink,
+        userType: 'parent'
+      });
+
+      await sendEmail(to, `${schoolName} invited you to join HelloK12!`, html);
+
+      Logger.info(`Parent invitation sent to ${to} from ${schoolName}`);
+    } catch (error) {
+      Logger.error('Failed to send parent invitation:', error);
       throw error;
     }
   },

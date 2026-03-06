@@ -12,4 +12,18 @@ router.get(
   adminController.getSchools
 );
 
+router.get(
+  '/parents',
+  authenticate,
+  authorize([USER_ROLES.SUPER_ADMIN]),
+  adminController.getParents
+);
+
+router.patch(
+  '/users/:userId',
+  authenticate,
+  authorize([USER_ROLES.SUPER_ADMIN]),
+  adminController.updateUser
+);
+
 export default router;

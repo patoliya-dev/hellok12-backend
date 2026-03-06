@@ -31,7 +31,165 @@ function parseRange(raw: string): { min?: number; max?: number } {
   return Number.isFinite(exact) ? { min: exact, max: exact } : {};
 }
 
+const clampInt = (value: any, min: number, max: number, fallback: number) => {
+  const n = parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+};
+
+const monthKey = (d: Date) =>
+  `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+
+const monthLabel = (d: Date) =>
+  d.toLocaleString('en-US', {
+    month: 'short',
+    timeZone: 'UTC'
+  });
+
+function buildMonthlyBuckets(months: number) {
+  const now = new Date();
+  const start = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (months - 1), 1, 0, 0, 0, 0)
+  );
+  const end = new Date();
+
+  const buckets: Array<{ key: string; label: string; start: Date; end: Date }> = [];
+  for (let i = 0; i < months; i++) {
+    const bucketStart = new Date(
+      Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + i, 1, 0, 0, 0, 0)
+    );
+    const bucketEnd = new Date(
+      Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + i + 1, 0, 23, 59, 59, 999)
+    );
+    buckets.push({
+      key: monthKey(bucketStart),
+      label: monthLabel(bucketStart),
+      start: bucketStart,
+      end: bucketEnd
+    });
+  }
+
+  return { start, end, buckets };
+}
+
+function computeDeltaPct(current: number, previous: number) {
+  if (!Number.isFinite(previous) || previous <= 0) return current > 0 ? 100 : 0;
+  const v = ((current - previous) / previous) * 100;
+  const out = Number(v.toFixed(1));
+  return Object.is(out, -0) ? 0 : out;
+}
+
 export const AdminService = {
+  getDashboardOverview: async ({ months }: { months?: string } = {}) => {
+    const monthCount = clampInt(months, 6, 24, 9);
+    const { start, end, buckets } = buildMonthlyBuckets(monthCount);
+    const [roleCountsAgg, totalCourses, growthAgg] = await Promise.all([
+      User.aggregate([
+        { $match: { role: { $in: ['school', 'teacher', 'student'] } } },
+        { $group: { _id: '$role', count: { $sum: 1 } } }
+      ]),
+      Course.countDocuments({ status: { $ne: 'archived' } }),
+      User.aggregate([
+        {
+          $match: {
+            role: { $in: ['teacher', 'student'] },
+            createdAt: { $gte: start, $lte: end }
+          }
+        },
+        {
+          $project: {
+            role: 1,
+            y: { $year: { date: '$createdAt', timezone: 'UTC' } },
+            m: { $month: { date: '$createdAt', timezone: 'UTC' } },
+            teacherType: {
+              $cond: [
+                { $ne: ['$role', 'teacher'] },
+                null,
+                {
+                  $cond: [{ $eq: [{ $type: '$school' }, 'objectId'] }, 'school', 'independent']
+                }
+              ]
+            }
+          }
+        },
+        {
+          $group: {
+            _id: {
+              y: '$y',
+              m: '$m',
+              role: '$role',
+              teacherType: '$teacherType'
+            },
+            count: { $sum: 1 }
+          }
+        }
+      ])
+    ]);
+
+    const roleCounts = new Map<string, number>();
+    roleCountsAgg.forEach((r: any) => roleCounts.set(String(r?._id || ''), Number(r?.count || 0)));
+
+    const schoolGrowthLookup = new Map<string, number>();
+    const independentGrowthLookup = new Map<string, number>();
+    const studentGrowthLookup = new Map<string, number>();
+
+    growthAgg.forEach((r: any) => {
+      const key = `${r?._id?.y}-${String(r?._id?.m || '').padStart(2, '0')}`;
+      const count = Number(r?.count || 0);
+      if (r?._id?.role === 'student') {
+        studentGrowthLookup.set(key, count);
+        return;
+      }
+      if (r?._id?.teacherType === 'school') {
+        schoolGrowthLookup.set(key, count);
+      } else {
+        independentGrowthLookup.set(key, count);
+      }
+    });
+
+    const schoolGrowth = buckets.map(b => ({
+      label: b.label,
+      value: schoolGrowthLookup.get(b.key) || 0
+    }));
+    const independentGrowth = buckets.map(b => ({
+      label: b.label,
+      value: independentGrowthLookup.get(b.key) || 0
+    }));
+    const studentGrowth = buckets.map(b => ({
+      label: b.label,
+      value: studentGrowthLookup.get(b.key) || 0
+    }));
+
+    const last = studentGrowth?.[studentGrowth.length - 1]?.value || 0;
+    const prev = studentGrowth?.[studentGrowth.length - 2]?.value || 0;
+    const deltaPercentage = computeDeltaPct(last, prev);
+
+    return {
+      period: {
+        months: monthCount,
+        start,
+        end
+      },
+      cards: {
+        totalSchools: roleCounts.get('school') || 0,
+        totalTeachers: roleCounts.get('teacher') || 0,
+        totalStudents: roleCounts.get('student') || 0,
+        totalCourses
+      },
+      charts: {
+        schoolTeachersGrowth: schoolGrowth,
+        independentTeachersGrowth: independentGrowth,
+        studentRegistrationGrowth: studentGrowth
+      },
+      trends: {
+        studentRegistration: {
+          deltaPercentage,
+          direction: deltaPercentage >= 0 ? 'up' : 'down'
+        }
+      }
+    };
+  },
+
   getSchools: async ({ page, limit, search }: { page: string; limit: string; search: string }) => {
     const pageNum = Math.max(1, parseInt(String(page || '1'), 10) || 1);
     const limitNum = Math.max(1, Math.min(200, parseInt(String(limit || '50'), 10) || 50));

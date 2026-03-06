@@ -9,6 +9,8 @@ const router = Router();
 router.use(authenticate);
 router.use(authorize([USER_ROLES.SUPER_ADMIN]));
 
+router.get('/dashboard/overview', adminController.getDashboardOverview);
+
 router.get('/parents', adminController.getParents);
 
 router.get('/teachers', adminController.getTeachers);

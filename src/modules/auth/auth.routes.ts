@@ -14,6 +14,7 @@ const router = express.Router();
 
 router.post('/signup', validateRequest(studentRegistrationSchema), authController.signup);
 router.post('/login', validateRequest(loginSchema), authController.login);
+router.post('/admin/login', validateRequest(loginSchema), authController.adminLogin);
 router.get('/verify-email', authController.verifyEmail);
 router.post(
   '/forgot-password',

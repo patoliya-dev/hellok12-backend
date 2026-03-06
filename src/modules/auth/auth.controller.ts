@@ -2,6 +2,29 @@ import { Request, Response, NextFunction } from 'express';
 import { authService } from './auth.service';
 import { createErrorResponse, createSuccessResponse } from '../../utils/apiResponse';
 
+const respondLoginSuccess = (res: Response, result: any) =>
+  res.json({
+    success: true,
+    message: 'Login successful',
+    accessToken: result.accessToken,
+    refreshToken: result.refreshToken,
+    user: result.user
+  });
+
+const respondLoginError = (res: Response, error: any) => {
+  if (error.message === 'Email not verified') {
+    return res.status(401).json({
+      success: false,
+      message: 'Please verify your email before logging in'
+    });
+  }
+
+  return res.status(401).json({
+    success: false,
+    message: error.message || 'Login failed'
+  });
+};
+
 export const authController = {
   signup: async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -76,27 +99,24 @@ export const authController = {
   login: async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { email, password, rememberMe } = req.body;
-      const result = await authService.login(email, password, rememberMe);
-
-      res.json({
-        success: true,
-        message: 'Login successful',
-        accessToken: result.accessToken,
-        refreshToken: result.refreshToken,
-        user: result.user
+      const result = await authService.login(email, password, rememberMe, {
+        allowedRoles: ['student', 'parent', 'teacher', 'school']
       });
+      return respondLoginSuccess(res, result);
     } catch (error: any) {
-      if (error.message === 'Email not verified') {
-        return res.status(401).json({
-          success: false,
-          message: 'Please verify your email before logging in'
-        });
-      }
+      return respondLoginError(res, error);
+    }
+  },
 
-      res.status(401).json({
-        success: false,
-        message: error.message || 'Login failed'
+  adminLogin: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { email, password, rememberMe } = req.body;
+      const result = await authService.login(email, password, rememberMe, {
+        allowedRoles: ['super_admin']
       });
+      return respondLoginSuccess(res, result);
+    } catch (error: any) {
+      return respondLoginError(res, error);
     }
   },
 

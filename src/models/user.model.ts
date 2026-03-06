@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import Logger from '../utils/winstonLogger.utils';
 
-export type UserRole = 'student' | 'parent' | 'teacher' | 'school';
+export type UserRole = 'student' | 'parent' | 'teacher' | 'school' | 'super_admin';
 
 export interface IUserProfile {
   // Student-specific fields

@@ -24,5 +24,7 @@ const AttachmentSchema = new Schema(
 );
 
 AttachmentSchema.index({ entityType: 1, entityId: 1 });
+AttachmentSchema.index({ entityType: 1, status: 1, entityId: 1, createdAt: -1 });
+
 export type AttachmentDoc = InferSchemaType<typeof AttachmentSchema> & { _id: string };
 export const AttachmentModel = mongoose.model('Attachment', AttachmentSchema);

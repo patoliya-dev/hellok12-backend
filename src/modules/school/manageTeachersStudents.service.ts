@@ -31,6 +31,35 @@ type TeacherLean = {
 
 const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+function parseAgeRange(ageRange: string): { min?: number; max?: number } {
+  const raw = String(ageRange || '').trim();
+  if (!raw) return {};
+  if (raw.includes('+')) {
+    const min = Number(raw.replace('+', '').trim());
+    return Number.isFinite(min) ? { min } : {};
+  }
+  if (raw.includes('-')) {
+    const [a, b] = raw.split('-').map(x => Number(String(x).trim()));
+    const min = Number.isFinite(a) ? a : undefined;
+    const max = Number.isFinite(b) ? b : undefined;
+    return { min, max };
+  }
+  const exact = Number(raw);
+  return Number.isFinite(exact) ? { min: exact, max: exact } : {};
+}
+
+type GetStudentsArgs = {
+  inviterId: string;
+  inviterRole: string;
+  page: string;
+  limit: string;
+  search?: string;
+  status?: string;
+  school?: string;
+  language?: string;
+  ageRange?: string;
+};
+
 export const SchoolService = {
   getSchoolTeachers: async (schoolId: string) => {
     const schoolObjectId = new Types.ObjectId(schoolId);
@@ -129,7 +158,8 @@ export const SchoolService = {
   },
 
   inviteUser: async (
-    schoolId: string,
+    inviterId: string,
+    inviterRole: string,
     email: string,
     recipientRole: RecipientRole,
     message?: string
@@ -137,9 +167,9 @@ export const SchoolService = {
     const recipientEmail = normalizeEmail(email);
     const role = recipientRole as 'teacher' | 'student';
 
-    const school = await User.findById(schoolId).lean();
-    if (!school) throw Object.assign(new Error('School not found'), { statusCode: 404 });
-    if (!school.isVerified)
+    const inviter = await User.findById(inviterId).lean();
+    if (!inviter) throw Object.assign(new Error('School not found'), { statusCode: 404 });
+    if (!inviter.isVerified)
       throw Object.assign(new Error('School must be verified'), { statusCode: 403 });
 
     const existingUser = await User.findOne({ email: recipientEmail }).lean();
@@ -150,7 +180,7 @@ export const SchoolService = {
     const now = new Date();
 
     const already = await Invitation.findOne({
-      organization: new Types.ObjectId(schoolId),
+      organization: new Types.ObjectId(inviterId),
       recipientEmail,
       recipientRole: role,
       status: 'pending',
@@ -170,15 +200,15 @@ export const SchoolService = {
     const expiresAt = new Date(Date.now() + 7 * 86400000);
 
     const invitation = await Invitation.create({
-      invitedBy: schoolId,
-      organization: schoolId,
+      invitedBy: inviterId,
+      organization: inviterId,
       recipientEmail,
       recipientRole: role,
-      inviterRole: 'school',
+      inviterRole,
       invitationMessage: message || '',
       inviteToken: tokenHash,
       status: 'pending',
-      meta: { flow: 'SCHOOL_INVITE' },
+      meta: { flow: `${inviterRole.toUpperCase()}_INVITE` },
       expiresAt
     });
 
@@ -186,9 +216,9 @@ export const SchoolService = {
     const inviteLink = `${clientURL}/accept-invitation?inviteId=${invitation._id}&ticket=${rawTicket}`;
 
     if (role === 'teacher') {
-      await emailService.sendTeacherInvitation(recipientEmail, school.name, inviteLink, message);
+      await emailService.sendTeacherInvitation(recipientEmail, inviter.name, inviteLink, message);
     } else {
-      await emailService.sendStudentInvitation(recipientEmail, school.name, inviteLink, message);
+      await emailService.sendStudentInvitation(recipientEmail, inviter.name, inviteLink, message);
     }
 
     return {
@@ -315,85 +345,96 @@ export const SchoolService = {
     return { success: true, data: { rejected: true } };
   },
 
-  getStudents: async (
-    schoolId: string,
-    page: string,
-    limit: string,
-    search?: string,
-    status?: string
-  ) => {
-    const schoolObjectId = new Types.ObjectId(schoolId);
-
+  getStudents: async ({
+    inviterId,
+    inviterRole,
+    page,
+    limit,
+    search,
+    status,
+    school,
+    language,
+    ageRange
+  }: GetStudentsArgs) => {
     const pageNum = Math.max(1, parseInt(String(page || '1'), 10) || 1);
     const limitNum = Math.max(1, Math.min(100, parseInt(String(limit || '10'), 10) || 10));
     const skip = (pageNum - 1) * limitNum;
 
-    // A) Students enrolled in school-owned courses
-    const courses = await Course.find({ ownerId: schoolObjectId }).select('_id').lean();
-    const courseIds = courses.map(c => c._id);
+    const role = String(inviterRole || '').toLowerCase();
 
-    let enrolledStudentIds: Types.ObjectId[] = [];
+    // -----------------------------
+    // A) Determine scope
+    // -----------------------------
+    let scopedIds: Types.ObjectId[] | null = null;
 
-    if (courseIds.length > 0) {
-      const raw = await bookingModel.distinct('student', {
-        course: { $in: courseIds }
+    if (role === 'school') {
+      const inviterObjectId = new Types.ObjectId(inviterId);
+
+      const courses = await Course.find({ ownerId: inviterObjectId }).select('_id').lean();
+      const courseIds = courses.map(c => c._id);
+
+      let enrolledStudentIds: Types.ObjectId[] = [];
+      if (courseIds.length > 0) {
+        const raw = await bookingModel.distinct('student', { course: { $in: courseIds } });
+        enrolledStudentIds = (raw || [])
+          .map((id: any) =>
+            id instanceof Types.ObjectId
+              ? id
+              : Types.ObjectId.isValid(String(id))
+                ? new Types.ObjectId(String(id))
+                : null
+          )
+          .filter((x): x is Types.ObjectId => Boolean(x));
+      }
+
+      const invitedStudentIds = await User.distinct('_id', {
+        role: 'student',
+        school: inviterObjectId
       });
 
-      enrolledStudentIds = (raw || [])
-        .map((id: any) => {
-          if (id instanceof Types.ObjectId) return id;
-          const s = String(id);
-          return Types.ObjectId.isValid(s) ? new Types.ObjectId(s) : null;
-        })
-        .filter((x): x is Types.ObjectId => Boolean(x));
+      scopedIds = Array.from(
+        new Set([...enrolledStudentIds, ...invitedStudentIds].map(id => String(id)))
+      ).map(id => new Types.ObjectId(id));
+
+      if (scopedIds.length === 0) {
+        return {
+          students: [],
+          pagination: {
+            total: 0,
+            page: pageNum,
+            limit: limitNum,
+            pages: 1,
+            hasNextPage: false,
+            hasPrevPage: false
+          }
+        };
+      }
     }
 
-    // B) Students who accepted school invitation (linked to school)
-    const invitedStudentIds = await User.distinct('_id', {
-      role: 'student',
-      school: schoolObjectId
-    });
+    // super_admin: global scope; apply optional school filter
 
-    // Union (unique ObjectIds)
-    const uniqueIds = Array.from(
-      new Set([...enrolledStudentIds, ...invitedStudentIds].map(id => String(id)))
-    ).map(id => new Types.ObjectId(id));
+    // -----------------------------
+    // B) Build base user match
+    // -----------------------------
+    const userMatch: any = { role: 'student' };
 
-    if (uniqueIds.length === 0) {
-      return {
-        students: [],
-        pagination: {
-          total: 0,
-          page: pageNum,
-          limit: limitNum,
-          pages: 1,
-          hasNextPage: false,
-          hasPrevPage: false
-        }
-      };
-    }
-
-    const userQuery: any = {
-      _id: { $in: uniqueIds },
-      role: 'student'
-    };
+    if (scopedIds) userMatch._id = { $in: scopedIds };
 
     const normalizedStatus = String(status || '')
       .trim()
       .toLowerCase();
-    if (normalizedStatus) userQuery.status = normalizedStatus;
+    if (normalizedStatus && normalizedStatus !== 'all') userMatch.status = normalizedStatus;
+
+    const schoolStr = String(school || '').trim();
+    if (schoolStr && schoolStr !== 'all' && Types.ObjectId.isValid(schoolStr)) {
+      userMatch.school = new Types.ObjectId(schoolStr);
+    }
 
     const term = String(search || '').trim();
-
     if (term) {
-      // If it looks like an ObjectId, allow exact match
       const maybeId = Types.ObjectId.isValid(term) ? new Types.ObjectId(term) : null;
-
-      // Escape regex for safe partial search
-      const safe = escapeRegex(term);
-      const rx = new RegExp(safe, 'i');
-
-      userQuery.$or = [
+      const rx = new RegExp(escapeRegex(term), 'i');
+      userMatch.$or = [
         ...(maybeId ? [{ _id: maybeId }] : []),
         { name: rx },
         { email: rx },
@@ -401,36 +442,126 @@ export const SchoolService = {
       ];
     }
 
-    const total = await User.countDocuments(userQuery);
+    const lang = String(language || '').trim();
+    const { min: ageMin, max: ageMax } = parseAgeRange(String(ageRange || ''));
 
-    const users = await User.find(userQuery)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limitNum)
-      .select('name email phone status profile createdAt updatedAt')
-      .populate([
-        {
-          path: 'studentProfile',
-          select: 'address languages age gender',
-          options: { lean: true }
-        },
-        { path: 'profileImage', select: 'url', options: { lean: true } }
-      ])
-      .lean({ virtuals: true });
+    // -----------------------------
+    // C) Aggregate with lookup to StudentProfile + facet for pagination
+    // -----------------------------
+    const pipeline: any[] = [
+      { $match: userMatch },
 
-    const students = users.map((u: any) => ({
+      {
+        $lookup: {
+          from: 'studentprofiles', // collection name (mongoose pluralizes StudentProfile)
+          localField: '_id',
+          foreignField: 'user',
+          as: 'studentProfile'
+        }
+      },
+      { $unwind: { path: '$studentProfile', preserveNullAndEmptyArrays: true } },
+
+      // Profile image lookup
+      {
+        $lookup: {
+          from: 'attachments',
+          let: { userId: '$_id' },
+          pipeline: [
+            {
+              $match: {
+                $expr: { $eq: ['$entityId', '$$userId'] },
+                entityType: 'User',
+                status: 'READY'
+              }
+            },
+            { $sort: { createdAt: -1 } },
+            { $limit: 1 },
+            { $project: { _id: 0, url: 1 } }
+          ],
+          as: 'profileImage'
+        }
+      },
+      { $unwind: { path: '$profileImage', preserveNullAndEmptyArrays: true } },
+
+      // Apply language filter (supports studentProfile.languages)
+      ...(lang
+        ? [
+            {
+              $match: { $or: [{ 'studentProfile.languages': lang }, { 'profile.languages': lang }] }
+            }
+          ]
+        : []),
+
+      // Apply age filter:
+      // studentProfile.age is string in your schema, so convert safely
+      ...(ageMin !== undefined || ageMax !== undefined
+        ? [
+            {
+              $match: {
+                $or: [
+                  {
+                    'studentProfile.age': {
+                      ...(ageMin !== undefined ? { $gte: ageMin } : {}),
+                      ...(ageMax !== undefined ? { $lte: ageMax } : {})
+                    }
+                  },
+                  {
+                    'profile.age': {
+                      ...(ageMin !== undefined ? { $gte: ageMin } : {}),
+                      ...(ageMax !== undefined ? { $lte: ageMax } : {})
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        : []),
+
+      {
+        $facet: {
+          items: [
+            { $sort: { createdAt: -1 } },
+            { $skip: skip },
+            { $limit: limitNum },
+            {
+              $project: {
+                name: 1,
+                email: 1,
+                phone: 1,
+                status: 1,
+                school: 1,
+                createdAt: 1,
+                updatedAt: 1,
+                profile: 1,
+                studentProfile: 1,
+                profileImage: 1
+              }
+            }
+          ],
+          total: [{ $count: 'count' }]
+        }
+      }
+    ];
+
+    const agg = await User.aggregate(pipeline);
+
+    const items = agg?.[0]?.items || [];
+    const total = agg?.[0]?.total?.[0]?.count || 0;
+
+    const pages = Math.max(1, Math.ceil(total / limitNum));
+
+    const students = items.map((u: any) => ({
       _id: u._id,
       name: u.name,
       email: u.email,
       phone: u.phone,
+      school: u.school,
       profile: u.studentProfile || u.profile || null,
       profileImage: u.profileImage || null,
       status: u.status,
       createdAt: u.createdAt,
       updatedAt: u.updatedAt
     }));
-
-    const pages = Math.max(1, Math.ceil(total / limitNum));
 
     return {
       students,

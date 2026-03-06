@@ -75,6 +75,7 @@ export interface IUser extends Document {
   school?: Types.ObjectId; // Reference to school (for teachers/students)
   parent?: Types.ObjectId; // Reference to parent (for students)
   children?: Types.ObjectId[]; // References to children (for parents)
+  admin?: Types.ObjectId; // Reference to admin (for teachers/students/school)
 
   // Authentication & Verification
   isVerified: boolean;
@@ -133,7 +134,7 @@ const UserSchema = new Schema<IUser>(
         // Email is required for independent users (not parent-created children)
         return (
           (this.role === 'student' && !this.parent) ||
-          ['parent', 'teacher', 'school'].includes(this.role)
+          ['parent', 'teacher', 'school', 'super_admin'].includes(this.role)
         );
       },
       validate: {
@@ -151,7 +152,7 @@ const UserSchema = new Schema<IUser>(
         // Password required for independent users (not parent-created children)
         return (
           (this.role === 'student' && !this.parent) ||
-          ['parent', 'teacher', 'school'].includes(this.role)
+          ['parent', 'teacher', 'school', 'super_admin'].includes(this.role)
         );
       }
     },
@@ -167,8 +168,8 @@ const UserSchema = new Schema<IUser>(
     role: {
       type: String,
       enum: {
-        values: ['student', 'parent', 'teacher', 'school'],
-        message: 'Role must be one of: student, parent, teacher, school'
+        values: ['student', 'parent', 'teacher', 'school', 'super_admin'],
+        message: 'Role must be one of: student, parent, teacher, school, super_admin'
       },
       required: [true, 'Role is required']
     },
@@ -195,6 +196,19 @@ const UserSchema = new Schema<IUser>(
           return school && school.role === 'school';
         },
         message: 'Referenced school must exist and have school role'
+      }
+    },
+
+    admin: {
+      type: Schema.Types.ObjectId,
+      ref: 'User', // Reference to school user
+      validate: {
+        validator: async function (v: Types.ObjectId) {
+          if (!v) return true;
+          const admin = await model('User').findById(v);
+          return admin && admin.role === 'super_admin';
+        },
+        message: 'Referenced super_admin must exist and have super_admin role'
       }
     },
 
@@ -345,7 +359,8 @@ UserSchema.virtual('dashboardUrl').get(function (this: IUser) {
     student: '/student/dashboard',
     parent: '/parent/dashboard',
     teacher: '/teacher/dashboard',
-    school: '/school/dashboard'
+    school: '/school/dashboard',
+    super_admin: '/admin/dashboard'
   };
   return dashboardUrls[this.role] || '/dashboard';
 });

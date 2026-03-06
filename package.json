@@ -16,7 +16,8 @@
     "start-dev": "nodemon dist/server.js",
     "build-run": "tsc && npm start",
     "format:check": "prettier --check .",
-    "format:fix": "prettier --write . --ignore-path .prettierignore"
+    "format:fix": "prettier --write . --ignore-path .prettierignore",
+    "bootstrap:superadmin": "node dist/scripts/bootstrapSuperAdmin.js"
   },
   "lint-staged": {
     "*.{ts,js}": [

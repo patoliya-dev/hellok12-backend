@@ -106,7 +106,14 @@ export const buildLessonsPipeline = (filter: any, studentName?: string): any[] =
                       // Check if lessonId in meta matches session lesson
                       {
                         $eq: [
-                          { $toObjectId: { $ifNull: ['$meta.lessonId', ''] } },
+                          {
+                            $convert: {
+                              input: '$meta.lessonId',
+                              to: 'objectId',
+                              onError: null,
+                              onNull: null
+                            }
+                          },
                           '$$sessionLesson'
                         ]
                       }

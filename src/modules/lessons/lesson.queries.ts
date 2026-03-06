@@ -91,45 +91,36 @@ export const buildLessonsPipeline = (filter: any, studentName?: string): any[] =
         from: 'bookings',
         let: {
           sessionStudents: '$students',
-          sessionLesson: '$lesson'
+          sessionCourse: '$course'
         },
         pipeline: [
           {
             $match: {
               $expr: {
-                $eq: ['$isTrial', true]
-              }
-            }
-          },
-          // safely convert meta.lessonId -> ObjectId (null if invalid/missing)
-          {
-            $addFields: {
-              metaLessonObjId: {
-                $convert: {
-                  input: '$meta.lessonId',
-                  to: 'objectId',
-                  onError: null,
-                  onNull: null
-                }
-              }
-            }
-          },
-          {
-            $match: {
-              $expr: {
-                $or: [
-                  // Check if student is in the session
-                  { $in: ['$student', '$$sessionStudents'] },
-
-                  // lesson-based trial booking (only if conversion succeeded)
-                  { $eq: ['$metaLessonObjId', '$$sessionLesson'] }
+                $and: [
+                  { $eq: ['$course', '$$sessionCourse'] },
+                  { $in: ['$student', '$$sessionStudents'] }
                 ]
               }
             }
           },
-          { $project: { _id: 1, student: 1, metaLessonObjId: 1 } }
+
+          // IMPORTANT: only consider confirmed/paid bookings (adjust field name if yours differs)
+          // If your schema uses "paymentStatus" (PAID/FAILED/PENDING), use that.
+          // If your schema uses "status", change accordingly.
+          {
+            $match: {
+              paymentStatus: 'PAID'
+            }
+          },
+
+          // Keep only what we need
+          { $project: { _id: 1, student: 1, isTrial: 1, createdAt: 1 } },
+
+          // latest first (so newest paid booking wins if duplicates exist)
+          { $sort: { createdAt: -1 } }
         ],
-        as: 'trialBookings'
+        as: 'paidBookings'
       }
     }
   ];
@@ -157,13 +148,6 @@ export const buildLessonsPipeline = (filter: any, studentName?: string): any[] =
       start: 1,
       end: 1,
       status: 1,
-      bookingType: {
-        $cond: {
-          if: { $gt: [{ $size: '$trialBookings' }, 0] },
-          then: 'trial',
-          else: 'enrolled'
-        }
-      },
       studentData: {
         $map: {
           input: '$studentData',
@@ -193,24 +177,55 @@ export const buildLessonsPipeline = (filter: any, studentName?: string): any[] =
             bookingType: {
               $let: {
                 vars: {
-                  studentTrialBooking: {
-                    $arrayElemAt: [
-                      {
-                        $filter: {
-                          input: '$trialBookings',
-                          as: 'booking',
-                          cond: { $eq: ['$$booking.student', '$$student._id'] }
-                        }
-                      },
-                      0
-                    ]
+                  // all paid bookings for this student in this course
+                  bks: {
+                    $filter: {
+                      input: '$paidBookings',
+                      as: 'b',
+                      cond: { $eq: ['$$b.student', '$$student._id'] }
+                    }
                   }
                 },
                 in: {
-                  $cond: {
-                    if: '$$studentTrialBooking',
-                    then: 'trial',
-                    else: 'enrolled'
+                  $let: {
+                    vars: {
+                      // newest paid non-trial booking
+                      paidNonTrial: {
+                        $arrayElemAt: [
+                          {
+                            $filter: {
+                              input: '$$bks',
+                              as: 'b2',
+                              cond: { $eq: ['$$b2.isTrial', false] }
+                            }
+                          },
+                          0
+                        ]
+                      },
+                      // newest paid trial booking
+                      paidTrial: {
+                        $arrayElemAt: [
+                          {
+                            $filter: {
+                              input: '$$bks',
+                              as: 'b3',
+                              cond: { $eq: ['$$b3.isTrial', true] }
+                            }
+                          },
+                          0
+                        ]
+                      }
+                    },
+                    in: {
+                      // precedence: enrolled wins over trial
+                      $cond: [
+                        { $ne: ['$$paidNonTrial', null] },
+                        'enrolled',
+                        {
+                          $cond: [{ $ne: ['$$paidTrial', null] }, 'trial', 'enrolled']
+                        }
+                      ]
+                    }
                   }
                 }
               }

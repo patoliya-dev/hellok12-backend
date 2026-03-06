@@ -771,6 +771,30 @@ export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
       }
     }
   });
+
+  // Lookup School Profile (to get schoolName via teacher.school -> schoolprofiles.user)
+  pipeline.push({
+    $lookup: {
+      from: 'schoolprofiles',
+      let: { schoolUserId: '$school' },
+      pipeline: [
+        { $match: { $expr: { $eq: ['$user', '$$schoolUserId'] } } },
+        { $project: { _id: 0, schoolName: 1 } }
+      ],
+      as: 'schoolProfile'
+    }
+  });
+
+  // Add schoolName
+  pipeline.push({
+    $addFields: {
+      schoolName: { $arrayElemAt: ['$schoolProfile.schoolName', 0] }
+    }
+  });
+
+  // Optional: remove temp array
+  pipeline.push({ $project: { schoolProfile: 0 } });
+
   // Project
   pipeline.push({
     $project: {
@@ -795,7 +819,9 @@ export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
       studentsTaught: 1,
       feedbacks: 1,
       courses: 1,
-      availableCoursesCount: 1
+      availableCoursesCount: 1,
+      school: 1,
+      schoolName: 1
     }
   });
 

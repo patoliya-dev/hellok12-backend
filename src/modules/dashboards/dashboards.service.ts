@@ -11,8 +11,8 @@ import { FeedbackRating } from '../../models/feedbackRatings.model';
 import bookingModel from '../../models/booking.model';
 import payoutModel from '../../models/payout.model';
 import { Course } from '../../models/course.model';
-import TransactionModel from '../../models/transaction.model';
 import { User } from '../../models/user.model';
+import { getWeekRangeFromISO } from '../lessons/lesson.util';
 
 export const teacherDashboardService = {
   getDashboardStats: async (teacherId: string) => {
@@ -127,7 +127,7 @@ type CurrencyAgg = {
   currency: string;
   amountCents: number;
   netAmountCents: number;
-  count: number;
+  transactionCount: number;
 };
 
 const toUpperCurrency = (v: any) =>
@@ -152,36 +152,43 @@ function startEndOfMonthUTC(timeZone: string) {
   };
 }
 
+function buildPayoutReceiverMatch(userId: string) {
+  const userObj = Types.ObjectId.isValid(userId) ? new Types.ObjectId(userId) : null;
+
+  const or: any[] = [
+    ...(userObj ? [{ toUser: userObj }] : []),
+    { 'metadata.raw.payoutReceiverId': userId },
+    { 'metadata.payoutReceiverId': userId },
+    { 'metadata.schoolId': userId }
+  ];
+
+  return { $or: or };
+}
+
 export const SchoolDashboardService = {
   async getSchoolMetrics({ schoolId, timeZone }: Args) {
     const schoolObjId = new Types.ObjectId(schoolId);
+    const tz = timeZone;
 
-    const { start: weekStart, end: weekEnd } = startEndOfWeekUTC(timeZone);
-    const { start: monthStart, end: monthEnd } = startEndOfMonthUTC(timeZone);
+    // deterministic Monday-start week boundaries in user's timezone
+    const { start: weekStart, end: weekEnd } = getWeekRangeFromISO(undefined, 1, tz);
+    const { start: monthStart, end: monthEnd } = startEndOfMonthUTC(tz);
 
-    /**
-     * IMPORTANT: ACTIVE COURSES ONLY
-     * - This becomes the single source of truth for courseIds used in other metrics.
-     */
-    const activeCoursesQuery = Course.find({
-      ownerId: schoolObjId,
-      ownerType: 'school',
-      status: 'active' // enforce active only
-    })
-      .select({ _id: 1 })
-      .lean();
-
-    const activeTeachersQuery = User.countDocuments({
-      role: 'teacher',
-      school: schoolObjId,
-      status: 'active',
-      isVerified: true
-    });
-
-    // Run independent queries concurrently
+    // ACTIVE courses only
     const [activeCourseDocs, activeTeachers] = await Promise.all([
-      activeCoursesQuery,
-      activeTeachersQuery
+      Course.find({
+        ownerId: schoolObjId,
+        ownerType: 'school',
+        status: 'active'
+      })
+        .select({ _id: 1 })
+        .lean(),
+      User.countDocuments({
+        role: 'teacher',
+        school: schoolObjId,
+        status: 'active',
+        isVerified: true
+      })
     ]);
 
     const courseIds = activeCourseDocs.map(c => c._id);
@@ -197,7 +204,7 @@ export const SchoolDashboardService = {
     const scheduledLessonsThisWeekQuery = SessionModel.countDocuments({
       course: { $in: safeCourseIds },
       start: { $gte: weekStart, $lte: weekEnd },
-      status: { $in: [SessionStatus.SCHEDULED, SessionStatus.IN_PROGRESS, SessionStatus.COMPLETED] }
+      status: { $in: [SessionStatus.SCHEDULED, SessionStatus.IN_PROGRESS] } // adjust if you don’t have IN_PROGRESS
     });
 
     /**
@@ -206,20 +213,20 @@ export const SchoolDashboardService = {
      * - If you want revenue only from ACTIVE courses, you must store courseId in transaction.metadata
      *   or keep a direct reference; otherwise you cannot reliably filter by course status here.
      */
-    const revenueByCurrencyQuery: Promise<CurrencyAgg[]> = TransactionModel.aggregate([
+    const revenueByCurrencyQuery: Promise<CurrencyAgg[]> = payoutModel.aggregate([
       {
         $match: {
-          payee: schoolObjId,
-          status: 'SUCCEEDED',
+          ...buildPayoutReceiverMatch(schoolId),
+          status: { $in: ['PAID', 'PROCESSING', 'PENDING'] },
           createdAt: { $gte: monthStart, $lte: monthEnd }
         }
       },
       {
         $group: {
           _id: { $toUpper: { $ifNull: ['$currency', 'usd'] } },
-          amountCents: { $sum: { $ifNull: ['$amount', 0] } },
-          netAmountCents: { $sum: { $ifNull: ['$netAmount', 0] } },
-          count: { $sum: 1 }
+          amountCents: { $sum: { $ifNull: ['$amount', 0] } }, // gross
+          netAmountCents: { $sum: { $ifNull: ['$netAmount', 0] } }, // payee net
+          transactionCount: { $sum: 1 }
         }
       },
       { $sort: { amountCents: -1 } },
@@ -229,7 +236,7 @@ export const SchoolDashboardService = {
           currency: '$_id',
           amountCents: 1,
           netAmountCents: 1,
-          count: 1
+          transactionCount: 1
         }
       }
     ]);
@@ -239,12 +246,18 @@ export const SchoolDashboardService = {
       revenueByCurrencyQuery
     ]);
 
-    const primary = revenueByCurrency[0] || {
-      currency: 'USD',
-      amountCents: 0,
-      netAmountCents: 0,
-      count: 0
-    };
+    const primary =
+      revenueByCurrency[0] ||
+      ({
+        currency: 'USD',
+        amountCents: 0,
+        netAmountCents: 0,
+        transactionCount: 0
+      } as CurrencyAgg);
+
+    // Safety: net cannot exceed gross (if it does, your historical data is inconsistent)
+    // We do NOT mutate DB here; we only clamp the metric output to avoid dashboard lying.
+    const safePrimaryNet = Math.min(safeInt(primary.netAmountCents), safeInt(primary.amountCents));
 
     return {
       activeTeachers,
@@ -254,15 +267,15 @@ export const SchoolDashboardService = {
       monthlyRevenue: {
         currency: toUpperCurrency(primary.currency),
         amountCents: safeInt(primary.amountCents),
-        netAmountCents: safeInt(primary.netAmountCents),
-        transactionCount: safeInt(primary.count)
+        netAmountCents: safePrimaryNet,
+        transactionCount: safeInt(primary.transactionCount)
       },
 
       monthlyRevenueByCurrency: revenueByCurrency.map(r => ({
         currency: toUpperCurrency(r.currency),
         amountCents: safeInt(r.amountCents),
-        netAmountCents: safeInt(r.netAmountCents),
-        transactionCount: safeInt(r.count)
+        netAmountCents: Math.min(safeInt(r.netAmountCents), safeInt(r.amountCents)),
+        transactionCount: safeInt(r.transactionCount)
       }))
     };
   }

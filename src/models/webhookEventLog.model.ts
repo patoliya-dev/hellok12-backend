@@ -6,4 +6,6 @@ const WebhookEventLogSchema = new Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
+WebhookEventLogSchema.index({ eventId: 1 }, { unique: true });
+
 export default mongoose.model('WebhookEventLog', WebhookEventLogSchema);

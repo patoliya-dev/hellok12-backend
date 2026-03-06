@@ -188,74 +188,110 @@ export const getMonthlyEarnings = async (
 }> => {
   const targetMonth = month || new Date();
 
-  // Get start and end of target month
-  const startOfMonth = new Date(targetMonth.getFullYear(), targetMonth.getMonth(), 1);
-  const endOfMonth = new Date(targetMonth.getFullYear(), targetMonth.getMonth() + 1, 0);
-  endOfMonth.setHours(23, 59, 59, 999);
+  // Month ranges
+  const startOfMonth = new Date(targetMonth.getFullYear(), targetMonth.getMonth(), 1, 0, 0, 0, 0);
+  const endOfMonth = new Date(
+    targetMonth.getFullYear(),
+    targetMonth.getMonth() + 1,
+    0,
+    23,
+    59,
+    59,
+    999
+  );
 
-  // Get start and end of last month
-  const startOfLastMonth = new Date(targetMonth.getFullYear(), targetMonth.getMonth() - 1, 1);
-  const endOfLastMonth = new Date(targetMonth.getFullYear(), targetMonth.getMonth(), 0);
-  endOfLastMonth.setHours(23, 59, 59, 999);
+  const startOfLastMonth = new Date(
+    targetMonth.getFullYear(),
+    targetMonth.getMonth() - 1,
+    1,
+    0,
+    0,
+    0,
+    0
+  );
+  const endOfLastMonth = new Date(
+    targetMonth.getFullYear(),
+    targetMonth.getMonth(),
+    0,
+    23,
+    59,
+    59,
+    999
+  );
+
+  const teacherObjId = Types.ObjectId.isValid(teacherId) ? new Types.ObjectId(teacherId) : null;
+
+  // Support multiple receiver shapes:
+  // - payouts.toUser (ObjectId)
+  // - metadata.raw.payoutReceiverId (string or ObjectId)
+  // - metadata.payoutReceiverId (string or ObjectId)
+  const receiverMatch: any = {
+    $or: [
+      ...(teacherObjId ? [{ toUser: teacherObjId }] : []),
+      { 'metadata.raw.payoutReceiverId': teacherId },
+      ...(teacherObjId ? [{ 'metadata.raw.payoutReceiverId': teacherObjId }] : []),
+      { 'metadata.payoutReceiverId': teacherId },
+      ...(teacherObjId ? [{ 'metadata.payoutReceiverId': teacherObjId }] : [])
+    ]
+  };
+
+  // Support status variants used across systems
+  const statusMatch = { $in: ['PAID', 'PROCESSING', 'PENDING', 'SENT', 'SETTLED'] };
+
+  const groupStage = {
+    _id: null,
+    totalAmount: {
+      $sum: {
+        // prefer netAmount, fallback to amount
+        $ifNull: ['$netAmount', { $ifNull: ['$amount', 0] }]
+      }
+    },
+    currency: { $first: '$currency' }
+  };
 
   const [currentMonthPayouts, lastMonthPayouts] = await Promise.all([
     // Current month earnings
     PayoutModel.aggregate([
       {
         $match: {
-          'metadata.raw.payoutReceiverId': teacherId,
-          status: { $in: ['PAID', 'PROCESSING', 'PENDING'] },
-          createdAt: {
-            $gte: startOfMonth,
-            $lte: endOfMonth
-          }
+          ...receiverMatch,
+          status: statusMatch,
+          createdAt: { $gte: startOfMonth, $lte: endOfMonth }
         }
       },
-      {
-        $group: {
-          _id: null,
-          totalAmount: { $sum: '$netAmount' },
-          currency: { $first: '$currency' }
-        }
-      }
+      { $group: groupStage }
     ]),
 
     // Last month earnings
     PayoutModel.aggregate([
       {
         $match: {
-          'metadata.raw.payoutReceiverId': teacherId,
-          status: { $in: ['PAID', 'PROCESSING', 'PENDING'] },
-          createdAt: {
-            $gte: startOfLastMonth,
-            $lte: endOfLastMonth
-          }
+          ...receiverMatch,
+          status: statusMatch,
+          createdAt: { $gte: startOfLastMonth, $lte: endOfLastMonth }
         }
       },
       {
         $group: {
           _id: null,
-          totalAmount: { $sum: '$netAmount' }
+          totalAmount: { $sum: { $ifNull: ['$netAmount', { $ifNull: ['$amount', 0] }] } }
         }
       }
     ])
   ]);
 
-  const currentAmount = currentMonthPayouts[0]?.totalAmount / 100 || 0;
-  const lastAmount = lastMonthPayouts[0]?.totalAmount / 100 || 0;
-  const currency = currentMonthPayouts[0]?.currency || 'USD';
+  const currentAmount = Number(currentMonthPayouts?.[0]?.totalAmount || 0) / 100 || 0;
+  const lastAmount = Number(lastMonthPayouts?.[0]?.totalAmount || 0) / 100 || 0;
+  const currency = currentMonthPayouts?.[0]?.currency || 'USD';
 
   // Calculate percentage change
   const changeFromLastMonth =
     lastAmount > 0 ? Number((((currentAmount - lastAmount) / lastAmount) * 100).toFixed(1)) : 0;
 
-  const monthName = targetMonth.toLocaleDateString('en-US', {
-    month: 'long',
-    year: 'numeric'
-  });
+  const monthName = targetMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 
   return {
-    amount: currentAmount,
+    amount: Number(currentAmount.toFixed(2)),
     currency,
     month: monthName,
     changeFromLastMonth

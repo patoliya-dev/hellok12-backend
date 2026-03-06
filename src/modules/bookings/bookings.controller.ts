@@ -3,8 +3,10 @@ import { Types } from 'mongoose';
 import BookingModel from '../../models/booking.model';
 import { Course } from '../../models/course.model';
 import { Lesson } from '../../models/lesson.model';
+import { SessionModel } from '../../models/sessions.model';
 import { createErrorResponse, createSuccessResponse } from '../../utils/apiResponse';
 import { COURSE_MODE, LESSON_TYPES } from '../../utils/constants';
+import { canPurchaseCourseRun } from './entitlement.util';
 
 type AddressPayload = {
   line1?: string;
@@ -64,6 +66,48 @@ function validateRequiredAddress(addr: AddressPayload | null) {
   return { ok: Object.keys(errors).length === 0, errors };
 }
 
+async function buildCoursePricing(courseObjectId: Types.ObjectId, coursePrice: number) {
+  const now = new Date();
+  const stats = await Lesson.aggregate([
+    { $match: { courseId: courseObjectId } },
+    {
+      $group: {
+        _id: null,
+        totalLessons: { $sum: 1 },
+        completedLessons: {
+          $sum: { $cond: [{ $lt: ['$startAt', now] }, 1, 0] }
+        },
+        upcomingLessons: {
+          $sum: { $cond: [{ $gte: ['$startAt', now] }, 1, 0] }
+        }
+      }
+    }
+  ]);
+
+  const totalLessons = Number(stats?.[0]?.totalLessons || 0);
+  const completedLessons = Number(stats?.[0]?.completedLessons || 0);
+  const upcomingLessons = Number(stats?.[0]?.upcomingLessons || 0);
+
+  // Time-aware availability: only future lessons are purchasable.
+  const remainingLessons = Math.max(upcomingLessons, 0);
+
+  const fullAmountCents = Math.max(0, Math.round((Number(coursePrice) || 0) * 100));
+  const effectiveAmountCents =
+    totalLessons > 0
+      ? Math.round((fullAmountCents / totalLessons) * remainingLessons)
+      : fullAmountCents;
+
+  return {
+    totalLessons,
+    completedLessons,
+    upcomingLessons,
+    remainingLessons,
+    fullAmountCents,
+    effectiveAmountCents,
+    effectiveAmount: Number((effectiveAmountCents / 100).toFixed(2))
+  };
+}
+
 /**
  * Create a booking (booking record must exist BEFORE creating PaymentIntent)
  * - validates capacity / trial rules
@@ -82,7 +126,6 @@ export async function createBooking(req: Request, res: Response) {
       courseId,
       studentId,
       teacherId,
-      amount,
       isTrial = false,
       lessonId,
       location,
@@ -173,6 +216,43 @@ export async function createBooking(req: Request, res: Response) {
     // Capacity validation (paid enrollment)
     // -----------------------------
     if (!isTrial) {
+      const existingPaidBooking = await BookingModel.findOne({
+        course: courseObjectId,
+        student: studentObjectId,
+        isTrial: { $ne: true },
+        paymentStatus: { $in: ['PENDING', 'PROCESSING', 'PAID'] }
+      })
+        .select({ _id: 1, paymentStatus: 1 })
+        .lean();
+
+      if (!canPurchaseCourseRun(!!existingPaidBooking)) {
+        // Self-heal for historical data: if already paid, make sure this student is attached
+        // to all sessions of the purchased course (new lessons added after purchase).
+        if (existingPaidBooking?.paymentStatus === 'PAID') {
+          await SessionModel.updateMany(
+            { course: courseObjectId },
+            { $addToSet: { students: studentObjectId } }
+          );
+
+          const sessionIds = (
+            await SessionModel.find({ course: courseObjectId }).select('_id').lean()
+          ).map((s: any) => s._id);
+
+          if (sessionIds.length) {
+            await BookingModel.updateOne(
+              { _id: existingPaidBooking._id },
+              { $addToSet: { sessions: { $each: sessionIds } } }
+            );
+          }
+        }
+
+        return res.status(409).json({
+          success: false,
+          code: 'ALREADY_PURCHASED',
+          message: 'This course is already purchased for this student'
+        });
+      }
+
       if (isGroup && typeof course.studentCapacity === 'number') {
         if ((course.enrolledCount || 0) >= course.studentCapacity) {
           return res
@@ -270,6 +350,26 @@ export async function createBooking(req: Request, res: Response) {
       }
     } // end isTrial block
 
+    const pricing = isTrial
+      ? {
+          totalLessons: 0,
+          completedLessons: 0,
+          upcomingLessons: 0,
+          remainingLessons: 0,
+          fullAmountCents: 0,
+          effectiveAmountCents: 0,
+          effectiveAmount: 0
+        }
+      : await buildCoursePricing(courseObjectId, Number((course as any)?.price || 0));
+
+    if (!isTrial && pricing.remainingLessons <= 0) {
+      return res.status(409).json({
+        success: false,
+        code: 'NO_REMAINING_LESSONS',
+        message: 'No remaining lessons are available in this course'
+      });
+    }
+
     // Build booking payload
     const bookingPayload: any = {
       student: studentObjectId,
@@ -278,7 +378,14 @@ export async function createBooking(req: Request, res: Response) {
       isTrial: !!isTrial,
       paymentStatus: isTrial ? 'NOT_REQUIRED' : 'PENDING',
       paymentFlow: isTrial ? 'TRIAL_FREE' : 'DIRECT_SUPER_ADMIN',
-      meta: Object.assign({}, meta, { amount: amount ?? null }),
+      meta: Object.assign({}, meta, {
+        amount: pricing.effectiveAmountCents,
+        fullAmountCents: pricing.fullAmountCents,
+        completedLessons: pricing.completedLessons,
+        upcomingLessons: pricing.upcomingLessons,
+        remainingLessons: pricing.remainingLessons,
+        totalLessons: pricing.totalLessons
+      }),
       createdAt: new Date(),
       updatedAt: new Date()
     };
@@ -293,27 +400,78 @@ export async function createBooking(req: Request, res: Response) {
     // Store booking-level address only for in-person 1-on-1
     bookingPayload.address = isInPerson && isOneOnOne ? normalizedAddress : null;
 
+    const revertTrialReservation = async () => {
+      if (!isTrial || !reservedLesson?._id) return;
+      try {
+        await Lesson.findByIdAndUpdate(reservedLesson._id, {
+          $inc: { trialCapacity: 1 },
+          $set: { isTrialAvailable: true }
+        });
+        await Course.updateOne({ _id: courseObjectId }, { $set: { isTrialAvailable: true } });
+      } catch (revertErr) {
+        console.error('Failed to revert trialCapacity', revertErr);
+      }
+    };
+
     // Create booking doc (booking must exist before PaymentIntent)
     let booking;
     try {
       booking = await BookingModel.create(bookingPayload);
     } catch (createErr) {
       // Revert reserved seat if booking creation fails
-      if (isTrial && reservedLesson?._id) {
-        try {
-          await Lesson.findByIdAndUpdate(reservedLesson._id, {
-            $inc: { trialCapacity: 1 },
-            $set: { isTrialAvailable: true }
-          });
-        } catch (revertErr) {
-          console.error('Failed to revert trialCapacity after booking creation failure', revertErr);
-        }
-      }
+      await revertTrialReservation();
       throw createErr;
     }
 
+    // Trial bookings bypass payments/webhooks, so apply trial-side session updates here.
+    if (isTrial) {
+      try {
+        const trialLessonId = booking.lesson || reservedLesson?._id || lessonObjectId;
+        if (!trialLessonId) {
+          throw new Error('Trial lesson is required to attach session');
+        }
+
+        await SessionModel.updateMany(
+          { lesson: trialLessonId },
+          { $addToSet: { students: studentObjectId } }
+        );
+
+        const trialSessions = await SessionModel.find({ lesson: trialLessonId })
+          .select('_id')
+          .lean();
+        const sessionIds = (trialSessions || []).map(s => s._id);
+
+        if (!sessionIds.length) {
+          throw new Error('No session found for selected trial lesson');
+        }
+
+        await BookingModel.updateOne(
+          { _id: booking._id },
+          {
+            $addToSet: { sessions: { $each: sessionIds } },
+            $set: { updatedAt: new Date() }
+          }
+        );
+
+        const refreshedBooking = await BookingModel.findById(booking._id).lean();
+        if (refreshedBooking) booking = refreshedBooking;
+      } catch (trialSyncErr: any) {
+        await BookingModel.deleteOne({ _id: booking._id });
+        await revertTrialReservation();
+
+        return res.status(500).json({
+          success: false,
+          code: 'TRIAL_SESSION_SYNC_FAILED',
+          message: 'Trial booking created but failed to attach session',
+          error: trialSyncErr?.message || 'Failed to sync trial booking session'
+        });
+      }
+    }
+
     // Success response
-    return res.status(201).json(createSuccessResponse({ booking, message: 'Booking created' }));
+    return res
+      .status(201)
+      .json(createSuccessResponse({ booking, pricing, message: 'Booking created' }));
   } catch (err: any) {
     console.error('createBooking error', err);
     return res.status(500).json(createErrorResponse('Internal server error', err?.message || err));

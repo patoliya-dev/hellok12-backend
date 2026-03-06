@@ -48,7 +48,7 @@ r.post(
   authorize([USER_ROLES.SCHOOL, USER_ROLES.TEACHER]),
   lessonCtrl.reorderLessons
 );
-r.get('/:id/details', courseCtrl.courseDetails);
+r.get('/:id/details', authenticate, courseCtrl.courseDetails);
 r.get('/:id/feedbacks', courseCtrl.courseFeedbacks);
 
 r.get('/school/courses', authenticate, authorize([USER_ROLES.SCHOOL]), courseCtrl.getSchoolCourses);

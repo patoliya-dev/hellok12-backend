@@ -19,6 +19,19 @@ import { normalizeTimezone } from './lesson.util';
 import { recomputeCourseTeachers } from '../courses/course.helper';
 import { User } from '../../models/user.model';
 
+const getPaidEnrollmentStudentIds = async (courseId: Types.ObjectId) => {
+  const paidEnrollments = await bookingModel
+    .find({
+      course: courseId,
+      isTrial: { $ne: true },
+      paymentStatus: 'PAID'
+    })
+    .select('student')
+    .lean();
+
+  return paidEnrollments.map((booking: any) => booking.student.toString());
+};
+
 export const createLesson = async (req: Request, res: Response) => {
   const parsed = lessonCreateSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -101,12 +114,15 @@ export const createLesson = async (req: Request, res: Response) => {
       return res.status(201).json(createSuccessResponse({ created }, 'Created', 201));
     }
 
+    const studentIds = await getPaidEnrollmentStudentIds(courseObjId);
+
     const session = await sessionService.createSessionForLesson({
       lessonId: created.id,
       courseId: created.courseId as unknown as string,
       teacherId: created.teacherId as unknown as string,
       start: created.startAt,
-      end: created.endAt
+      end: created.endAt,
+      students: studentIds
     });
     return res.status(201).json(createSuccessResponse({ created, session }, 'Created', 201));
   } catch (e: any) {
@@ -156,6 +172,9 @@ export const updateLesson = async (req: Request, res: Response) => {
         .status(409)
         .json(createErrorResponse('Another trial lesson already exists', 'Conflict', 409));
     }
+    if (e?.statusCode === 409) {
+      return res.status(409).json(createErrorResponse(e?.message || 'Conflict', 'Conflict', 409));
+    }
     return res
       .status(500)
       .json(createErrorResponse('Update lesson failed', 'Internal Server Error', 500));
@@ -163,10 +182,19 @@ export const updateLesson = async (req: Request, res: Response) => {
 };
 
 export const deleteLesson = async (req: Request, res: Response) => {
-  const removed = await LessonService.remove(req.params.id);
-  if (!removed)
-    return res.status(404).json(createErrorResponse('Lesson not found', 'Not found', 404));
-  return res.json(createSuccessResponse(removed, 'Deleted'));
+  try {
+    const removed = await LessonService.remove(req.params.id);
+    if (!removed)
+      return res.status(404).json(createErrorResponse('Lesson not found', 'Not found', 404));
+    return res.json(createSuccessResponse(removed, 'Deleted'));
+  } catch (e: any) {
+    if (e?.statusCode === 409 || e?.code === '409_CONFLICT_OVERLAP') {
+      return res.status(409).json(createErrorResponse(e?.message || 'Conflict', 'Conflict', 409));
+    }
+    return res
+      .status(500)
+      .json(createErrorResponse('Delete lesson failed', 'Internal Server Error', 500));
+  }
 };
 
 export const duplicateLesson = async (req: Request, res: Response) => {
@@ -242,15 +270,7 @@ export const bulkCreateForCourse = async (req: Request, res: Response) => {
 
     const course = await CourseService.getById(req.params.courseId);
 
-    const enrolledStudents = await bookingModel
-      .find({
-        course: courseId,
-        paymentStatus: 'PAID'
-      })
-      .select('student')
-      .lean();
-
-    const studentIds = enrolledStudents.map((booking: any) => booking.student.toString());
+    const studentIds = await getPaidEnrollmentStudentIds(courseId);
 
     const sessions = await Promise.all(
       result.items.map(async lesson => {

@@ -53,8 +53,11 @@ export const updateCourse = async (req: Request, res: Response) => {
     }
 
     return res.status(200).json(createSuccessResponse(updated, 'Course updated successfully', 200));
-  } catch (error) {
-    return res.status(500).json(createErrorResponse('Internal Server Error', 'Error', 500));
+  } catch (error: any) {
+    const status = Number(error?.statusCode || 500);
+    return res
+      .status(status)
+      .json(createErrorResponse(error?.message || 'Internal Server Error', 'Error', status));
   }
 };
 
@@ -117,13 +120,18 @@ export const listCourses = async (req: Request, res: Response) => {
   return res.json(createSuccessResponse(result));
 };
 
-export const courseDetails = async (req: Request, res: Response) => {
+export const courseDetails = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
+    const studentId = typeof req.query?.studentId === 'string' ? req.query.studentId : undefined;
 
     if (!id) return createErrorResponse('Invalid request', 'Invalid request', 400);
 
-    const data = await CourseService.getCourseDetails(id);
+    const data = await CourseService.getCourseDetails(
+      id,
+      { id: req.user?.id, role: req.user?.role },
+      studentId
+    );
 
     if (!data)
       return res.status(404).json(createErrorResponse('Course not found', 'Not found', 404));

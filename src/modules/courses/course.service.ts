@@ -6,6 +6,10 @@ import { CourseCreateDTO, CourseUpdateDTO } from './course.schemas';
 import { getCourseDetails, getFeedbacks } from './course.queries';
 import { FeedbackRating } from '../../models/feedbackRatings.model';
 import { COURSE_MODE, LESSON_TYPES } from '../../utils/constants';
+import BookingModel from '../../models/booking.model';
+import { User } from '../../models/user.model';
+import { ParentProfileModel } from '../../models/parentProfile.model';
+import { canPurchaseCourseRun } from '../bookings/entitlement.util';
 
 function sanitizeCourseAddress(input: any, mergedMode: string, mergedLessonType: string) {
   const needs = mergedMode === COURSE_MODE.IN_PERSON && mergedLessonType === LESSON_TYPES.GROUP;
@@ -23,6 +27,23 @@ function sanitizeCourseAddress(input: any, mergedMode: string, mergedLessonType:
       .trim()
       .toUpperCase()
   };
+}
+
+async function hasPaidOrInFlightPurchase(courseId: any, studentId: string) {
+  const normalizedStudentId = String(studentId || '').trim();
+  if (!Types.ObjectId.isValid(normalizedStudentId)) return false;
+  const studentObj = new Types.ObjectId(normalizedStudentId);
+
+  const existing = await BookingModel.findOne({
+    course: courseId,
+    student: studentObj,
+    isTrial: { $ne: true },
+    paymentStatus: { $in: ['PENDING', 'PROCESSING', 'PAID'] }
+  })
+    .select({ _id: 1 })
+    .lean();
+
+  return !canPurchaseCourseRun(!!existing);
 }
 
 export const CourseService = {
@@ -290,14 +311,97 @@ export const CourseService = {
     await Course.findByIdAndUpdate(courseId, { $set: { isTrialAvailable: !!hasTrial } });
   },
 
-  async getCourseDetails(id: string) {
+  async getCourseDetails(
+    id: string,
+    viewer?: { id?: string; role?: string },
+    studentIdFromQuery?: string
+  ) {
     try {
       const pipeline = getCourseDetails(id);
 
       const result = await Course.aggregate(pipeline);
 
       if (result.length > 0) {
-        return result[0];
+        const course = result[0];
+        const lessons = Array.isArray(course?.lessons) ? course.lessons : [];
+        const now = new Date();
+        // const activeLessons = lessons.filter((lesson: any) => lesson?.status === 'active');
+        const activeLessons = lessons;
+        const totalLessons = activeLessons.length;
+        const lessonStats = activeLessons.reduce(
+          (acc: { completed: number; upcoming: number }, lesson: any) => {
+            const startAt = lesson?.startAt ? new Date(lesson.startAt) : null;
+            if (!startAt || Number.isNaN(startAt.getTime())) return acc;
+            if (startAt < now) acc.completed += 1;
+            else acc.upcoming += 1;
+            return acc;
+          },
+          { completed: 0, upcoming: 0 }
+        );
+        const completedLessons = lessonStats.completed;
+        const upcomingLessons = lessonStats.upcoming;
+        const remainingLessons = Math.max(upcomingLessons, 0);
+        const fullAmountCents = Math.max(0, Math.round((Number(course?.price) || 0) * 100));
+        const effectivePriceCents =
+          totalLessons > 0
+            ? Math.round((fullAmountCents / totalLessons) * remainingLessons)
+            : fullAmountCents;
+
+        let targetStudentId: string | null = null;
+        const viewerRole = String(viewer?.role || '').toLowerCase();
+
+        if (viewerRole === 'student' && viewer?.id) {
+          targetStudentId = String(viewer.id);
+        } else if (viewerRole === 'parent' && viewer?.id && studentIdFromQuery) {
+          const requestedStudentId = String(studentIdFromQuery).trim();
+
+          if (Types.ObjectId.isValid(requestedStudentId)) {
+            const [parentProfile, parentDoc, childDoc] = await Promise.all([
+              ParentProfileModel.findOne({ user: viewer.id }).select({ children: 1 }).lean(),
+              User.findById(viewer.id).select({ children: 1 }).lean(),
+              User.findById(requestedStudentId).select({ parent: 1 }).lean()
+            ]);
+
+            const linkedChildIds = new Set<string>(
+              [
+                ...((parentProfile?.children as any[]) || []),
+                ...((parentDoc?.children as any[]) || [])
+              ].map((c: any) => String(c))
+            );
+
+            const isOwnedViaParentRef =
+              childDoc?.parent && String(childDoc.parent) === String(viewer.id);
+            const isOwnedViaChildrenArray = linkedChildIds.has(requestedStudentId);
+
+            if (isOwnedViaParentRef || isOwnedViaChildrenArray) {
+              targetStudentId = requestedStudentId;
+            }
+          }
+        }
+
+        let alreadyPurchased = false;
+
+        if (targetStudentId && Types.ObjectId.isValid(targetStudentId)) {
+          alreadyPurchased = await hasPaidOrInFlightPurchase(course?._id, targetStudentId);
+        }
+
+        return {
+          ...course,
+          pricing: {
+            totalLessons,
+            completedLessons,
+            upcomingLessons,
+            remainingLessons,
+            fullPriceCents: fullAmountCents,
+            fullPrice: Number((fullAmountCents / 100).toFixed(2)),
+            effectivePriceCents,
+            effectivePrice: Number((effectivePriceCents / 100).toFixed(2))
+          },
+          purchaseInfo: {
+            targetStudentId,
+            alreadyPurchased
+          }
+        };
       } else {
         throw new Error('Course not found');
       }

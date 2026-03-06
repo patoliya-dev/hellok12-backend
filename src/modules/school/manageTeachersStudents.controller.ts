@@ -1,6 +1,8 @@
 import { Request, Response } from 'express';
 import { SchoolService } from './manageTeachersStudents.service';
 import { createErrorResponse, createSuccessResponse } from '../../utils/apiResponse';
+import { USER_ROLES } from '../../utils/constants';
+import { Types } from 'mongoose';
 
 function handle(res: Response, error: any) {
   const status = error?.statusCode || 500;
@@ -10,9 +12,47 @@ function handle(res: Response, error: any) {
 export const teachersStudentsInvitationController = {
   getSchoolTeachers: async (req: Request, res: Response) => {
     try {
-      const schoolId = req.user?.id as string;
-      const teachers = await SchoolService.getSchoolTeachers(schoolId);
-      return res.status(200).json(createSuccessResponse(teachers, 'Fetched'));
+      const role = String(req.user?.role || '').toLowerCase();
+      const requesterId = String(req.user?.id || '');
+
+      // For SUPER_ADMIN: allow querying by schoolId
+      // support both keys: schoolId / school (FE might use either)
+      const qSchoolId = String((req.query.schoolId || req.query.school || '') as string).trim();
+
+      // Optional admin-only filter
+      const teacherType = String((req.query.teacherType || '') as string).trim(); // "school" | "independent"
+
+      // Optional filters (safe to add now; FE can ignore)
+      const page = String(req.query.page || '1');
+      const limit = String(req.query.limit || '200');
+      const search = String(req.query.search || '').trim();
+      const status = String(req.query.status || '').trim();
+
+      let schoolId: string | undefined;
+
+      if (role === USER_ROLES.SCHOOL) {
+        schoolId = requesterId;
+      } else if (role === USER_ROLES.SUPER_ADMIN) {
+        // If provided, scope to one school. Otherwise list all.
+        if (qSchoolId) {
+          if (!Types.ObjectId.isValid(qSchoolId)) {
+            throw Object.assign(new Error('Invalid schoolId'), { statusCode: 400 });
+          }
+          schoolId = qSchoolId;
+        }
+      }
+
+      const data = await SchoolService.getSchoolTeachers({
+        requesterRole: role,
+        schoolId,
+        teacherType,
+        page,
+        limit,
+        search,
+        status
+      });
+
+      return res.status(200).json(createSuccessResponse(data, 'Fetched'));
     } catch (e: any) {
       return handle(res, e);
     }
@@ -87,7 +127,7 @@ export const teachersStudentsInvitationController = {
         teacherType = ''
       } = req.query;
 
-      const out = await SchoolService.listInvitationsV2({
+      const out = await SchoolService.listInvitations({
         inviterId,
         inviterRole,
         role: String(role || ''),

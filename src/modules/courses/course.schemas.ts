@@ -1,6 +1,26 @@
 import { z } from 'zod';
 import { COURSE_MODE, LESSON_TYPES, AGE_GROUPS } from '../../utils/constants';
 
+export type Address = {
+  line1: string;
+  line2?: string;
+  area?: string;        // optional (society/locality)
+  city: string;
+  state?: string;
+  postalCode?: string;
+  country: string;      // e.g. "IN"
+};
+
+const addressSchema = z.object({
+  line1: z.string().min(2).max(200),
+  line2: z.string().max(200).optional(),
+  area: z.string().max(200).optional(),
+  city: z.string().min(2).max(120).optional(),
+  state: z.string().max(120).optional(),
+  postalCode: z.string().max(20).optional(),
+  country: z.string().min(2).max(2).optional() // "IN", "US"
+});
+
 export const courseCreateSchema = z
   .object({
     title: z.string().min(2).max(160),
@@ -16,12 +36,34 @@ export const courseCreateSchema = z
     endDate: z.coerce.date().nullable().optional(),
     introImageRef: z.string().optional(),
     status: z.enum(['draft', 'active', 'archived']).default('draft'),
-    teachers: z.array(z.string()).optional()
+    teachers: z.array(z.string()).optional(),
+    address: addressSchema.nullable().optional()
   })
   .refine(
     data => !data.endDate || (data.startDate && data.endDate && data.endDate >= data.startDate),
     { message: 'endDate must be greater than or equal to startDate', path: ['endDate'] }
-  );
+  ).superRefine((data, ctx) => {
+    const needsCourseAddress = data.mode === COURSE_MODE.IN_PERSON && data.lessonType === LESSON_TYPES.GROUP;
+
+    if (needsCourseAddress) {
+      if (!data.address || !data.address.line1) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['address'],
+          message: 'Address is required for in-person group courses'
+        });
+      }
+    } else {
+      // if not required, reject if provided (keeps data consistent)
+      if (data.address) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['address'],
+          message: 'Address is only allowed for in-person group courses'
+        });
+      }
+    }
+  });
 
 export type CourseCreateDTO = z.infer<typeof courseCreateSchema>;
 
@@ -40,7 +82,8 @@ export const courseUpdateSchema = z
     endDate: z.coerce.date().nullable().optional(),
     introImageRef: z.string().optional(),
     status: z.enum(['draft', 'active', 'archived']).optional(),
-    teachers: z.array(z.string()).optional()
+    teachers: z.array(z.string()).optional(),
+    address: addressSchema.nullable().optional()
   })
   .partial()
   .refine(

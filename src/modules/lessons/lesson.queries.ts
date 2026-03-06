@@ -97,32 +97,37 @@ export const buildLessonsPipeline = (filter: any, studentName?: string): any[] =
           {
             $match: {
               $expr: {
-                $and: [
-                  { $eq: ['$isTrial', true] },
-                  {
-                    $or: [
-                      // Check if student is in the session
-                      { $in: ['$student', '$$sessionStudents'] },
-                      // Check if lessonId in meta matches session lesson
-                      {
-                        $eq: [
-                          {
-                            $convert: {
-                              input: '$meta.lessonId',
-                              to: 'objectId',
-                              onError: null,
-                              onNull: null
-                            }
-                          },
-                          '$$sessionLesson'
-                        ]
-                      }
-                    ]
-                  }
+                $eq: ['$isTrial', true]
+              }
+            }
+          },
+          // safely convert meta.lessonId -> ObjectId (null if invalid/missing)
+          {
+            $addFields: {
+              metaLessonObjId: {
+                $convert: {
+                  input: '$meta.lessonId',
+                  to: 'objectId',
+                  onError: null,
+                  onNull: null
+                }
+              }
+            }
+          },
+          {
+            $match: {
+              $expr: {
+                $or: [
+                  // Check if student is in the session
+                  { $in: ['$student', '$$sessionStudents'] },
+
+                  // lesson-based trial booking (only if conversion succeeded)
+                  { $eq: ['$metaLessonObjId', '$$sessionLesson'] }
                 ]
               }
             }
-          }
+          },
+          { $project: { _id: 1, student: 1, metaLessonObjId: 1 } }
         ],
         as: 'trialBookings'
       }

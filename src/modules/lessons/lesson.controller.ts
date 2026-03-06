@@ -224,12 +224,18 @@ export const listLessonsForCourse = async (req: Request, res: Response) => {
 
 export const bulkCreateForCourse = async (req: Request, res: Response) => {
   try {
+    const userRole = req?.user?.role;
     const courseId = new Types.ObjectId(req.params.courseId);
     const lessons = req.body.lessons || [];
     const rawTz = req.userTimezone || 'UTC';
     const timeZone = normalizeTimezone(rawTz);
 
-    const result = await LessonService.bulkCreateForCourse({ courseId, lessons, timeZone });
+    const result = await LessonService.bulkCreateForCourse({
+      courseId,
+      lessons,
+      timeZone,
+      userRole
+    });
 
     const course = await CourseService.getById(req.params.courseId);
 

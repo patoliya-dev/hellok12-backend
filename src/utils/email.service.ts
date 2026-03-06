@@ -421,6 +421,95 @@ const createEnhancedFallbackTemplate = (templateName: string, context: TemplateC
                 </div>
             ${footer}`;
 
+    case 'teacher-invitation':
+      return `${baseStyle}
+            <div class="title">🎓 You're Invited to Join HelloK12!</div>
+            <div class="greeting">Dear Educator,</div>
+            <div class="message">
+                <p><strong>${context.schoolName}</strong> has invited you to join their school on HelloK12!</p>
+                
+                <div class="info-box">
+                    <p><strong>📨 Message from ${context.schoolName}:</strong></p>
+                    <p style="font-style: italic; color: #555;">${context.message || 'We would love to have you as part of our teaching team on HelloK12.'}</p>
+                </div>
+                
+                <p>By accepting this invitation, you will:</p>
+                <ul>
+                    <li>🏫 Join ${context.schoolName}'s teaching staff</li>
+                    <li>📚 Create and manage courses under the school</li>
+                    <li>👥 Teach students enrolled in the school</li>
+                    <li>📊 Access school resources and tools</li>
+                    <li>💰 Earn income through teaching</li>
+                </ul>
+            </div>
+            
+            <div class="cta-section">
+                <a href="${context.inviteLink}" class="cta-button">
+                    ✅ Accept Invite
+                </a>
+            </div>
+            
+            <div class="highlight">
+                <p><strong>⏰ Important:</strong> This invitation link will expire in 7 days.</p>
+                <p>If you don't have a HelloK12 account yet, you'll be able to create one when you accept the invitation.</p>
+            </div>
+            
+            <div class="info-box">
+                <p><strong>Questions?</strong> If you have any concerns or questions about this invitation, please contact ${context.schoolName} directly or reach out to our support team.</p>
+            </div>
+        ${footer}`;
+
+    case 'student-invitation':
+      return `${baseStyle}
+            <div class="title">🎒 You're Invited to Join HelloK12!</div>
+            <div class="greeting">Dear Student,</div>
+            <div class="message">
+                <p><strong>${context.schoolName}</strong> has invited you to join their school on HelloK12!</p>
+                
+                <div class="info-box">
+                    <p><strong>📨 Message from ${context.schoolName}:</strong></p>
+                    <p style="font-style: italic; color: #555;">${context.message || 'We are excited to have you join our learning community!'}</p>
+                </div>
+                
+                <p>As a student at ${context.schoolName}, you'll get access to:</p>
+                <ul>
+                    <li>📚 Interactive courses and learning materials</li>
+                    <li>👨‍🏫 Expert teachers from your school</li>
+                    <li>🎮 Fun learning games and activities</li>
+                    <li>📊 Track your progress and achievements</li>
+                    <li>🤝 Connect with classmates</li>
+                    <li>📝 Complete assignments and homework</li>
+                </ul>
+                
+                <div class="info-box" style="background-color: #fff3cd; border-left-color: #ffc107;">
+                    <p><strong>📌 Note for Parents/Guardians:</strong></p>
+                    <p>If the student is under 13 years old, please help them accept this invitation and create their account. You'll be able to monitor their progress and learning activities.</p>
+                </div>
+            </div>
+            
+            <div class="cta-section">
+                <a href="${context.inviteLink}" class="cta-button">
+                    ✅ Accept Invite
+                </a>
+            </div>
+            
+            <div class="highlight">
+                <p><strong>⏰ Important:</strong> This invitation link will expire in 7 days.</p>
+                <p>If you don't have a HelloK12 account yet, you'll be able to create one when you accept the invitation.</p>
+            </div>
+            
+            <div class="info-box">
+                <p><strong>Questions?</strong> If you or your parents have any questions about this invitation, please contact ${context.schoolName} directly or reach out to our support team.</p>
+            </div>
+            
+            <div style="margin-top: 30px; padding-top: 20px; border-top: 2px solid #f0f0f0; text-align: center; color: #7f8c8d;">
+                <p style="font-size: 13px;">If the button doesn't work, copy and paste this link into your browser:</p>
+                <p style="font-size: 12px; word-break: break-all; color: #667eea; background-color: #f8f9fa; padding: 10px; border-radius: 4px; margin: 10px 0;">
+                    ${context.inviteLink}
+                </p>
+            </div>
+        ${footer}`;
+
     default:
       return `${baseStyle}
                 <div class="title">📧 HelloK12 Notification</div>
@@ -513,7 +602,7 @@ export const emailService = {
         token,
         name,
         userType: 'student',
-        dashboardUrl: `${config.clientURL}/student-parent/dashboard`
+        dashboardUrl: `${config.clientURL}/student/dashboard`
       });
       await sendEmail(to, 'Welcome to HelloK12 - Verify Your Student Account', html);
       Logger.info(`Student verification email sent to ${to}`);
@@ -536,7 +625,7 @@ export const emailService = {
         childrenCount,
         userType: 'parent',
         childrenText: childrenCount === 1 ? 'child' : 'children',
-        dashboardUrl: `${config.clientURL}/student-parent/dashboard`
+        dashboardUrl: `${config.clientURL}/parent/dashboard`
       });
       await sendEmail(to, `Welcome to HelloK12 - Verify Your Parent Account`, html);
       Logger.info(`Parent verification email sent to ${to} for ${childrenCount} children`);
@@ -578,6 +667,52 @@ export const emailService = {
       Logger.info(`School verification email sent to ${to} for ${schoolName}`);
     } catch (error) {
       Logger.error('Failed to send school verification email:', error);
+      throw error;
+    }
+  },
+
+  sendTeacherInvitation: async (
+    to: string,
+    schoolName: string,
+    inviteLink: string,
+    message: string = ''
+  ) => {
+    try {
+      const html = compileTemplate('teacher-invitation', {
+        schoolName,
+        message,
+        inviteLink,
+        userType: 'teacher'
+      });
+
+      await sendEmail(to, `${schoolName} invited you to join HelloK12!`, html);
+
+      Logger.info(`Teacher invitation sent to ${to} from ${schoolName})`);
+    } catch (error) {
+      Logger.error('Failed to send teacher invitation:', error);
+      throw error;
+    }
+  },
+
+  sendStudentInvitation: async (
+    to: string,
+    schoolName: string,
+    inviteLink: string,
+    message: string = ''
+  ) => {
+    try {
+      const html = compileTemplate('student-invitation', {
+        schoolName,
+        message,
+        inviteLink,
+        userType: 'student'
+      });
+
+      await sendEmail(to, `${schoolName} invited you to join HelloK12!`, html);
+
+      Logger.info(`Student invitation sent to ${to} from ${schoolName}`);
+    } catch (error) {
+      Logger.error('Failed to send student invitation:', error);
       throw error;
     }
   },
@@ -639,8 +774,8 @@ export const emailService = {
   sendWelcomeEmail: async (email: string, name: string, userType: string): Promise<void> => {
     try {
       const dashboardUrls = {
-        student: '/student-parent/dashboard',
-        parent: '/student-parent/dashboard',
+        student: '/student/dashboard',
+        parent: '/parent/dashboard',
         teacher: '/teacher/dashboard',
         school: '/school/dashboard'
       };

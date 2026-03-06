@@ -341,8 +341,8 @@ UserSchema.virtual('isActive').get(function (this: IUser) {
 
 UserSchema.virtual('dashboardUrl').get(function (this: IUser) {
   const dashboardUrls = {
-    student: '/student-parent/dashboard',
-    parent: '/student-parent/dashboard',
+    student: '/student/dashboard',
+    parent: '/parent/dashboard',
     teacher: '/teacher/dashboard',
     school: '/school/dashboard'
   };

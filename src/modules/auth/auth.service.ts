@@ -18,34 +18,16 @@ import { ParentProfileModel } from '../../models/parentProfile.model';
 import { TeacherProfileModel } from '../../models/teacherProfile.model';
 import { SchoolProfileModel } from '../../models/schoolProfile.model';
 import { AttachmentModel } from '../../models/attachment.model';
-
-export interface AuthResult {
-  user: {
-    id: string;
-    email: string;
-    name: string;
-    role: string;
-    isVerified: boolean;
-    children?: any[];
-    profile?: any;
-    schoolName?: string;
-    profileImage?: any;
-    phone?: string;
-  };
-  accessToken?: string;
-  refreshToken?: string;
-  requiresEmailVerification?: boolean;
-  requiresAdminApproval?: boolean;
-  redirectUrl?: string;
-}
-
-export interface RegistrationResult {
-  user: IUser;
-  children?: IUser[];
-  requiresEmailVerification: boolean;
-  verificationEmailSent: boolean;
-  message: string;
-}
+import {
+  allowedUserFields,
+  AuthResult,
+  pick,
+  populateByRole,
+  profileModels,
+  RegistrationResult,
+  sanitizeProfile,
+  UpdateCurrentUserInput
+} from './auth.util';
 
 export const authService = {
   // Main registration handler (matches your frontend role selection flow)
@@ -372,23 +354,6 @@ export const authService = {
       user.lastLogin = new Date();
       await user.save();
 
-      // Determine redirect URL based on role (matches PDF dashboard routing)
-      let redirectUrl = '/dashboard';
-      switch (user.role) {
-        case 'student':
-        case 'parent':
-          redirectUrl = '/student-parent/dashboard';
-          break;
-        case 'teacher':
-          redirectUrl = '/teacher/dashboard';
-          break;
-        case 'school':
-          redirectUrl = '/school/dashboard';
-          break;
-        default:
-          redirectUrl = '/dashboard';
-      }
-
       Logger.info('User logged in successfully', {
         userId: user._id,
         role: user.role,
@@ -404,8 +369,7 @@ export const authService = {
           isVerified: user.isVerified
         },
         accessToken,
-        refreshToken,
-        redirectUrl
+        refreshToken
       };
     } catch (error) {
       Logger.error('Login failed:', error);
@@ -472,6 +436,7 @@ export const authService = {
 
       // Mark user as verified
       user.isVerified = true;
+      user.status = 'active';
       await user.save();
 
       // Send welcome email after verification
@@ -756,118 +721,100 @@ export const authService = {
     }
   },
 
-  updateCurrentUser: async (userId: string, body: any): Promise<any> => {
+  updateCurrentUser: async ({ userId, body }: UpdateCurrentUserInput): Promise<any> => {
     try {
-      const allowedUserFields = ['name', 'email', 'phone'];
-      const userUpdateFields: Record<string, any> = {};
-
-      for (const key of allowedUserFields) {
-        if (body[key] !== undefined) userUpdateFields[key] = body[key];
+      if (!Types.ObjectId.isValid(userId)) {
+        throw Object.assign(new Error('Invalid userId'), { statusCode: 400 });
       }
+
+      // 1) Get current user (for email uniqueness + role source)
+      const currentUser = await User.findById(userId).select('email role').lean();
+      if (!currentUser) throw Object.assign(new Error('User not found'), { statusCode: 404 });
+
+      // 2) Update user base fields safely
+      const userUpdateFields = pick(body || {}, allowedUserFields);
 
       if (userUpdateFields.email) {
-        const currentUser = await User.findById(userId);
-        if (!currentUser) throw new Error('User not found');
-
-        if (currentUser.email !== userUpdateFields.email) {
+        const newEmail = String(userUpdateFields.email).toLowerCase().trim();
+        if (newEmail !== String(currentUser.email || '').toLowerCase()) {
           const emailExists = await User.findOne({
-            email: userUpdateFields.email,
-            _id: { $ne: userId } // Exclude current user
-          });
+            email: newEmail,
+            _id: { $ne: userId }
+          })
+            .select('_id')
+            .lean();
 
           if (emailExists) {
-            throw new Error('Email is already taken! Please try another email.');
+            throw Object.assign(new Error('Email is already taken! Please try another email.'), {
+              statusCode: 409
+            });
           }
         }
+        userUpdateFields.email = newEmail;
       }
 
-      let updateUser;
       if (Object.keys(userUpdateFields).length > 0) {
-        updateUser = await User.findByIdAndUpdate(
+        const updated = await User.findByIdAndUpdate(
           userId,
           { $set: userUpdateFields },
           { new: true }
-        );
-      } else {
-        updateUser = await User.findById(userId);
-      }
-      if (!updateUser) throw new Error('User not found');
+        ).lean();
 
-      const profileModels: any = {
-        student: StudentProfileModel,
-        parent: ParentProfileModel,
-        teacher: TeacherProfileModel,
-        school: SchoolProfileModel
-      };
-      const role = body.role || updateUser.role;
+        if (!updated) throw Object.assign(new Error('User not found'), { statusCode: 404 });
+      }
+
+      // 3) Update / Create profile doc (UPSERT)
+      const role = String(currentUser.role); // DO NOT use body.role
       const Model = profileModels[role];
 
-      if (Model && body.profile) {
-        await Model.findOneAndUpdate(
-          { user: userId },
-          { $set: body.profile },
-          { new: true, runValidators: true, omitUndefined: true }
-        );
-      }
+      if (Model && body?.profile) {
+        const profilePatch = sanitizeProfile(role, body.profile);
 
-      let populateQuery: any = { path: `${role}Profile` };
-      if (role === 'parent') {
-        populateQuery = {
-          path: 'parentProfile',
-          populate: {
-            path: 'children',
-            populate: { path: 'studentProfile' }
-          }
-        };
-      } else if (role === 'teacher') {
-        populateQuery = {
-          path: 'teacherProfile',
-          populate: [
+        if (profilePatch) {
+          // Important: ensure nested objects merge properly
+          // If you want deep merge, you can map paths manually; for now $set is fine for your payload.
+          await Model.findOneAndUpdate(
+            { user: new Types.ObjectId(userId) },
             {
-              path: 'certificates',
-              model: 'Attachment',
-              select: 'url key name size createdAt updatedAt mime',
-              match: { status: 'READY' }
+              $set: profilePatch,
+              $setOnInsert: { user: new Types.ObjectId(userId) }
             },
             {
-              path: 'highlights',
-              model: 'Attachment',
-              select: 'url key name size createdAt updatedAt mime isIntro',
-              match: { status: 'READY' }
-            },
-            {
-              path: 'intro',
-              model: 'Attachment',
-              select: 'url key name size createdAt updatedAt mime',
-              match: { status: 'READY' }
+              new: true,
+              upsert: true,
+              runValidators: true,
+              setDefaultsOnInsert: true,
+              omitUndefined: true
             }
-          ]
-        };
+          );
+        }
       }
 
+      // 4) Fetch final hydrated user for FE (with virtual profile + profileImage)
       const user: any = await User.findById(userId)
         .populate({
           path: 'profileImage',
           match: { status: 'READY', entityType: 'User' },
           select: 'url'
         })
-        .populate(populateQuery)
+        .populate(populateByRole(role))
         .select('-password')
         .lean({ virtuals: true });
 
-      if (!user) throw new Error('User not found');
+      if (!user) throw Object.assign(new Error('User not found'), { statusCode: 404 });
 
+      // 5) Response shape consistent for FE
       return {
-        id: user._id.toString(),
-        email: user.email!,
+        id: String(user._id),
+        email: user.email,
         name: user.name,
         role: user.role,
         phone: user.phone,
         isVerified: user.isVerified,
         children: user.role === 'parent' ? user.children : undefined,
-        profile: user[`${role}Profile`],
+        profile: user[`${role}Profile`] || null,
         schoolName: user[`${role}Profile`]?.schoolName,
-        profileImage: user?.profileImage
+        profileImage: user?.profileImage || null
       };
     } catch (error) {
       Logger.error('Update current user failed:', error);

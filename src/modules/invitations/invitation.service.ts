@@ -5,14 +5,13 @@ import { User } from '../../models/user.model';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { throwHttp } from '../../utils/httpError';
+import { Types } from 'mongoose';
 
 type AcceptPayload = {
   inviteId: string;
   ticket: string;
   fullName?: string;
   password?: string;
-  // optional: if you later want to support authenticated accept:
-  // authUserEmail?: string;
 };
 
 const getRedirectForRole = (role: string) => {
@@ -21,11 +20,36 @@ const getRedirectForRole = (role: string) => {
   return '/';
 };
 
+const isObjectId = (v: any) => Types.ObjectId.isValid(String(v || ''));
+
+const normalizeRole = (r: any) =>
+  String(r || '')
+    .trim()
+    .toLowerCase();
+const normalizeInviterRole = (r: any) =>
+  String(r || '')
+    .trim()
+    .toLowerCase();
+
+const isTeacherSchoolInvite = (inv: any) => {
+  const inviterRole = normalizeInviterRole(inv?.inviterRole);
+  const metaType = normalizeRole(inv?.meta?.teacherType);
+  // School inviter always means school teacher invite
+  if (inviterRole === 'school') return true;
+  // Super admin school teacher invite stored in meta.teacherType
+  if (metaType === 'school') return true;
+  return false;
+};
+
+const isTeacherIndependentInvite = (inv: any) => {
+  const metaType = normalizeRole(inv?.meta?.teacherType);
+  return metaType === 'independent';
+};
+
 export const InvitationService = {
   validate: async (inviteId: string, ticket: string) => {
     const inv = await Invitation.findById(inviteId);
 
-    // HARD STOP – type-safe narrowing
     if (inv === null) {
       return throwHttp('Invitation not found', 404);
     }
@@ -46,9 +70,7 @@ export const InvitationService = {
 
     switch (inv.status) {
       case 'pending':
-        return {
-          invite: mapInvitationForApi(inv)
-        };
+        return { invite: mapInvitationForApi(inv) };
 
       case 'cancelled':
         return throwHttp('This invitation was cancelled by the school.', 410, {
@@ -85,25 +107,31 @@ export const InvitationService = {
       throw Object.assign(new Error('Invitation expired'), { statusCode: 410 });
     }
 
+    const recipientRole = normalizeRole(inv.recipientRole);
+    const inviterRole = normalizeInviterRole(inv.inviterRole);
+
     const email = normalizeEmail(inv.recipientEmail);
     let user = await User.findOne({ email });
 
+    // organization can be null now (independent teacher invite)
+    const org = inv.organization || null;
+    const orgId = org && isObjectId(org) ? org : null;
+
+    // create user if missing
     if (!user) {
-      if (!password || !fullName)
+      if (!password || !fullName) {
         throw Object.assign(new Error('Account details required'), { statusCode: 422 });
-      // const salt = await bcrypt.genSalt(12);
+      }
+
       user = await User.create({
         email,
         name: fullName,
         isVerified: true,
-        role: String(inv.recipientRole).toLowerCase(),
-        password: password,
-        ...(inv.inviterRole === 'school'
-          ? { school: inv.organization || inv.invitedBy }
-          : { admin: inv.organization || inv.invitedBy })
+        role: recipientRole,
+        password
       });
     } else {
-      // IMPORTANT: existing user -> must prove identity before issuing token
+      // existing user must confirm password
       if (!password) {
         throw Object.assign(
           new Error('Password required to accept invitation for an existing account'),
@@ -114,17 +142,62 @@ export const InvitationService = {
       if (!ok) throw Object.assign(new Error('Invalid password'), { statusCode: 401 });
     }
 
-    // Link to school + approval state for teacher
-    if (String(inv.recipientRole).toLowerCase() === 'teacher') {
-      if (inv.inviterRole === 'school') user.school = inv.organization || inv.invitedBy;
-      if (inv.inviterRole === 'super_admin') user.admin = inv.organization || inv.invitedBy;
+    /**
+     * Association rules (aligned with new SUPER_ADMIN teacher invite update)
+     */
+
+    // TEACHER
+    if (recipientRole === 'teacher') {
+      // If school teacher invite: link schoolId from invitation.organization
+      if (isTeacherSchoolInvite(inv)) {
+        if (orgId) user.school = orgId;
+      }
+
+      // If independent teacher invite: ensure school is not set by invitation
+      if (isTeacherIndependentInvite(inv)) {
+        // do not assign school (leave as-is)
+        // (optional) if you want to ensure no school is attached for new teachers, uncomment:
+        // if (!user._id) user.school = undefined; // not recommended; keep safe
+      }
+
+      // keep your "admin" link if inviter is super_admin
+      if (inviterRole === 'super_admin') {
+        // store who invited (platform) for traceability
+        user.admin = (isObjectId(inv.invitedBy) ? inv.invitedBy : user.admin) as any;
+      }
+
       user.profile = { ...(user.profile || {}), status: 'pending_approval' };
     }
 
-    if (String(inv.recipientRole)?.toLowerCase() === 'student') {
-      if (inv.inviterRole === 'school') user.school = inv.organization || inv.invitedBy;
-      if (inv.inviterRole === 'super_admin') user.admin = inv.organization || inv.invitedBy;
+    // STUDENT
+    if (recipientRole === 'student') {
+      if (inviterRole === 'school') {
+        // school inviter: org must be school
+        if (orgId) user.school = orgId;
+        else if (isObjectId(inv.invitedBy)) user.school = inv.invitedBy as any;
+      }
+
+      if (inviterRole === 'super_admin') {
+        // keep existing behavior (admin relationship)
+        if (isObjectId(inv.invitedBy)) user.admin = inv.invitedBy as any;
+      }
+
       user.status = 'active';
+    }
+
+    // PARENT (kept consistent / safe)
+    if (recipientRole === 'parent') {
+      if (inviterRole === 'school') {
+        if (orgId) user.school = orgId;
+        else if (isObjectId(inv.invitedBy)) user.school = inv.invitedBy as any;
+      }
+
+      if (inviterRole === 'super_admin') {
+        if (isObjectId(inv.invitedBy)) user.admin = inv.invitedBy as any;
+      }
+
+      // parent status: do not force active unless you want
+      // user.status = user.status || 'active';
     }
 
     await user.save();
@@ -145,7 +218,7 @@ export const InvitationService = {
         name: user.name,
         role: user.role,
         isVerified: user.isVerified,
-        ...((user.role === 'teacher' && user.school && { schoolId: user.school }) || {})
+        ...(user.role === 'teacher' && user.school ? { schoolId: user.school } : {})
       },
       accessToken,
       redirectTo: getRedirectForRole(user.role)

@@ -33,6 +33,13 @@ router.post(
   teachersStudentsInvitationController.inviteParent
 );
 
+router.post(
+  '/schools/invite',
+  authenticate,
+  authorize([USER_ROLES.SUPER_ADMIN]),
+  teachersStudentsInvitationController.inviteSchool
+);
+
 router.get(
   '/invitations',
   authenticate,

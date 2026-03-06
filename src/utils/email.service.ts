@@ -554,6 +554,20 @@ const createEnhancedFallbackTemplate = (templateName: string, context: TemplateC
     </div>
   ${footer}`;
 
+    case 'school-invitation':
+      return `
+    ${baseStyle}
+    <div class="title">🏫 Join HelloK12 as a School Partner</div>
+    <div class="message">
+      <p>You have been invited to join HelloK12 platform.</p>
+      <p>${context.message || ''}</p>
+    </div>
+    <div class="cta-section">
+      <a href="${context.inviteLink}" class="cta-button">Accept Invitation</a>
+    </div>
+    ${footer}
+  `;
+
     default:
       return `${baseStyle}
                 <div class="title">📧 HelloK12 Notification</div>
@@ -780,6 +794,29 @@ export const emailService = {
       Logger.info(`Parent invitation sent to ${to} from ${schoolName}`);
     } catch (error) {
       Logger.error('Failed to send parent invitation:', error);
+      throw error;
+    }
+  },
+
+  sendSchoolInvitation: async (
+    to: string,
+    schoolName: string,
+    inviteLink: string,
+    message: string = ''
+  ) => {
+    try {
+      const html = compileTemplate('school-invitation', {
+        schoolName,
+        message,
+        inviteLink,
+        userType: 'school'
+      });
+
+      await sendEmail(to, `${schoolName} invited you to join HelloK12!`, html);
+
+      Logger.info(`Parent invitation sent to ${to} from ${schoolName}`);
+    } catch (error) {
+      Logger.error('Failed to send school invitation:', error);
       throw error;
     }
   },

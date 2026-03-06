@@ -78,7 +78,7 @@ r.get(
 r.get(
   '/courses/:studentId',
   authenticate,
-  authorize([USER_ROLES.STUDENT, USER_ROLES.PARENT]),
+  authorize([USER_ROLES.STUDENT, USER_ROLES.PARENT, USER_ROLES.SCHOOL]),
   ctrl.getCourses
 );
 
@@ -86,7 +86,7 @@ r.get(
 r.get(
   '/studentLessons/:studentId',
   authenticate,
-  authorize([USER_ROLES.PARENT, USER_ROLES.STUDENT]),
+  authorize([USER_ROLES.PARENT, USER_ROLES.STUDENT, USER_ROLES.SCHOOL]),
   ctrl.getLessonsForStudentPage
 );
 

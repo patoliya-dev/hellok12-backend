@@ -19,7 +19,9 @@ function sanitizeCourseAddress(input: any, mergedMode: string, mergedLessonType:
     city: String(input.city || '').trim(),
     state: input.state ? String(input.state).trim() : undefined,
     postalCode: input.postalCode ? String(input.postalCode).trim() : undefined,
-    country: String(input.country || '').trim().toUpperCase()
+    country: String(input.country || '')
+      .trim()
+      .toUpperCase()
   };
 }
 
@@ -104,7 +106,11 @@ export const CourseService = {
 
     // enforce: address only for in-person group
     if ('address' in data || data.mode || data.lessonType) {
-      $set.address = sanitizeCourseAddress(data.address ?? current.address, nextMode, nextLessonType);
+      $set.address = sanitizeCourseAddress(
+        data.address ?? current.address,
+        nextMode,
+        nextLessonType
+      );
     }
 
     const updateQuery: UpdateQuery<CourseDoc> = { $set };

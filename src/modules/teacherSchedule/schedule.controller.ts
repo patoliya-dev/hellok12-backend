@@ -19,7 +19,16 @@ export const getSchedule = async (req: ValidatedRequest, res: Response) => {
 export const upsertWeekly = async (req: ValidatedRequest, res: Response) => {
   try {
     const teacherId = new Types.ObjectId(req.params.teacherId);
-    const updated = await ScheduleService.upsertWeekly(teacherId, req.validatedBody || req.body);
+
+    // Make schedule updates timezone-aware (same approach as getSlotsForDate / getSlotsForMonth)
+    const rawTz = (req as any).userTimezone || req.headers['x-timezone'] || 'UTC';
+
+    const updated = await ScheduleService.upsertWeekly(
+      teacherId,
+      (req.validatedBody || req.body) as any,
+      String(rawTz)
+    );
+
     return res.status(200).json(createSuccessResponse(updated, 'Schedule saved', 200));
   } catch (e: any) {
     if (e?.code === '422_VALIDATION') {
@@ -44,7 +53,8 @@ export const getSlotsForDate = async (req: ValidatedRequest, res: Response) => {
   try {
     const teacherId = new Types.ObjectId(req.params.teacherId);
     const { date } = req.validatedQuery || req.query;
-    const data = await ScheduleService.getSlotsForDate(teacherId, String(date));
+    const rawTz = (req as any).userTimezone || req.headers['x-timezone'] || 'UTC';
+    const data = await ScheduleService.getSlotsForDate(teacherId, String(date), String(rawTz));
     return res.status(200).json(createSuccessResponse(data, 'Slots fetched', 200));
   } catch (e: any) {
     if (e?.code === '404_NOT_FOUND') {
@@ -60,11 +70,10 @@ export const getSlotsForMonth = async (req: ValidatedRequest, res: Response) => 
   try {
     const teacherId = new Types.ObjectId(req.params.teacherId);
     const { month } = req.validatedQuery || req.query;
-    const data = await ScheduleService.getSlotsForMonth(teacherId, String(month));
+    const rawTz = (req as any).userTimezone || req.headers['x-timezone'] || 'UTC';
+    const data = await ScheduleService.getSlotsForMonth(teacherId, String(month), String(rawTz));
     return res.status(200).json(createSuccessResponse(data, 'Month slots fetched', 200));
   } catch (e: any) {
-    console.log('e', e);
-
     if (e?.code === '404_NOT_FOUND') {
       return res.status(404).json(createErrorResponse('Schedule not found', '404_NOT_FOUND', 404));
     }
@@ -77,7 +86,12 @@ export const getSlotsForMonth = async (req: ValidatedRequest, res: Response) => 
 export const patchDateSlots = async (req: ValidatedRequest, res: Response) => {
   try {
     const teacherId = new Types.ObjectId(req.params.teacherId);
-    const data = await ScheduleService.patchDateSlots(teacherId, req.validatedBody || req.body);
+    const rawTz = (req as any).userTimezone || req.headers['x-timezone'] || 'UTC';
+    const data = await ScheduleService.patchDateSlots(
+      teacherId,
+      req.validatedBody || req.body,
+      String(rawTz)
+    );
     return res.status(200).json(createSuccessResponse(data, 'Date slots updated', 200));
   } catch (e: any) {
     if (e?.code === '422_VALIDATION') {
@@ -101,7 +115,12 @@ export const patchDateSlots = async (req: ValidatedRequest, res: Response) => {
 export const validateLessonBlock = async (req: ValidatedRequest, res: Response) => {
   try {
     const teacherId = new Types.ObjectId(req.params.teacherId);
-    const result = await ScheduleService.validateBlock(teacherId, req.validatedBody || req.body);
+    const rawTz = (req as any).userTimezone || req.headers['x-timezone'] || 'UTC';
+    const result = await ScheduleService.validateBlock(
+      teacherId,
+      req.validatedBody || req.body,
+      String(rawTz)
+    );
     return res.status(200).json(createSuccessResponse(result, 'Validated', 200));
   } catch (e: any) {
     return res

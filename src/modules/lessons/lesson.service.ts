@@ -39,16 +39,16 @@ interface LessonResponse {
     time: string;
   };
   student:
-  | {
-    _id: string;
-    name: string;
-    age: number;
-  }
-  | Array<{
-    _id: string;
-    name: string;
-    age: number;
-  }>;
+    | {
+        _id: string;
+        name: string;
+        age: number;
+      }
+    | Array<{
+        _id: string;
+        name: string;
+        age: number;
+      }>;
   courseType: '1-on-1' | 'group';
   subject: {
     name: string;
@@ -69,7 +69,12 @@ interface PaginatedResponse {
   pendingCount: number;
 }
 
-type CreateArgs = { courseId: Types.ObjectId; lessons: LessonItemInput[]; timeZone?: string };
+type CreateArgs = {
+  courseId: Types.ObjectId;
+  lessons: LessonItemInput[];
+  timeZone?: string;
+  userRole?: string;
+};
 type UpdateArgs = {
   courseId: Types.ObjectId;
   updates: Array<{
@@ -418,7 +423,6 @@ export const LessonService = {
       (data as any).startAt = new Date(startAt.toISOString());
       (data as any).endAt = new Date(endAt.toISOString());
     }
-    console.log('data', data);
 
     const doc = await Lesson.create(data);
 
@@ -587,27 +591,29 @@ export const LessonService = {
     };
   },
 
-  async bulkCreateForCourse({ courseId, lessons, timeZone = 'UTC' }: CreateArgs) {
+  async bulkCreateForCourse({ courseId, lessons, timeZone = 'UTC', userRole }: CreateArgs) {
     const course = await Course.findById(courseId).lean();
     if (!course) {
       const e = new Error('Course not found');
       (e as any).code = '404_NOT_FOUND';
       throw e;
     }
-    const teacherId: Types.ObjectId = (course as any).teacherId || (course as any).ownerId;
 
-    if (!teacherId) {
-      const e = new Error('Course missing assigned teacher');
-      (e as any).code = '422_VALIDATION';
-      (e as any).fields = [{ path: 'course.teacherId', message: 'Assigned teacher is required' }];
-      throw e;
-    }
-
-    let nextOrder = await getNextOrderForCourse(courseId);
-    const docs: any[] = [];
+    // Step 1 — Parse & normalize all incoming lessons, compute their UTC start/end (respecting timeZone)
+    const parsed: Array<{
+      index: number;
+      teacherId: Types.ObjectId;
+      original: any;
+      schedule: any;
+      startAtUtc: Date;
+      endAtUtc: Date;
+    }> = [];
 
     for (let i = 0; i < lessons.length; i++) {
       const l = lessons[i];
+      const teacherId: Types.ObjectId =
+        userRole === 'teacher' ? (course as any).ownerId : l.teacherId;
+
       if (!l.schedule?.time || !l.schedule?.date) {
         const e = new Error('Missing schedule time/date');
         (e as any).code = '422_VALIDATION';
@@ -627,15 +633,12 @@ export const LessonService = {
         ];
         throw e;
       }
-      l.schedule.time = normalizedTime;
 
-      // defensive: reject schedule.date values that are full ISO with timezone offset — expect plain YYYY-MM-DD or Date object
+      // defensive: require local-date or Date object (reject full ISO with offset in bulk create)
       if (
         typeof l.schedule.date === 'string' &&
         !/^\d{4}-\d{2}-\d{2}$/.test(String(l.schedule.date).trim())
       ) {
-        const maybe = String(l.schedule.date).trim();
-        // If it's an ISO instant, fail fast (we want local date string)
         const err = new Error(
           'schedule.date must be YYYY-MM-DD (local date) or Date object - do not send full ISO with offsets'
         );
@@ -646,48 +649,97 @@ export const LessonService = {
         throw err;
       }
 
+      // compute canonical start/end instants (UTC) for this lesson
       const { startAt, endAt } = await parseStartEnd(
-        { date: l.schedule.date, time: l.schedule.time, duration: l.schedule.duration },
+        { date: l.schedule.date, time: normalizedTime, duration: l.schedule.duration },
         undefined,
         undefined,
         timeZone
       );
 
-      // Coerce to canonical UTC Date objects (avoid accidental re-interpretation later)
-      const startUtc = new Date(startAt.toISOString());
-      const endUtc = new Date(endAt.toISOString());
+      const startAtUtc = new Date(startAt.toISOString());
+      const endAtUtc = new Date(endAt.toISOString());
 
-      await checkOverlap({ teacherId, courseId, startAt: startUtc, endAt: endUtc });
-
-      docs.push({
-        courseId,
+      parsed.push({
+        index: i,
         teacherId,
-        title: l.title,
-        description: l.description?.trim() ?? undefined,
-        schedule: {
-          ...l.schedule, // ensure date remains a string 'YYYY-MM-DD'
-          time: l.schedule.time // normalized HH:mm
-        },
-        startAt: startUtc,
-        endAt: endUtc,
-        status: l.status || 'draft',
-        isTrialAvailable: !!l.isTrialAvailable,
-        trialCapacity: l.isTrialAvailable ? (l.trialCapacity ?? 1) : undefined,
-        order: typeof l.order === 'number' ? l.order : nextOrder++
+        original: l,
+        schedule: { ...l.schedule, time: normalizedTime },
+        startAtUtc,
+        endAtUtc
       });
     }
+
+    // Step 2 — DB-level overlap detection (any incoming interval vs any existing lesson)
+    if (parsed.length > 0) {
+      // Build $or clauses to find any existing lesson overlapping any incoming interval
+      const orClauses = parsed.map(p => ({
+        teacherId: p.teacherId,
+        courseId,
+        status: { $ne: 'archived' },
+        startAt: { $lt: p.endAtUtc },
+        endAt: { $gt: p.startAtUtc }
+      }));
+
+      const existingClash = await Lesson.findOne({ $or: orClauses })
+        .select({ _id: 1, title: 1, startAt: 1, endAt: 1 })
+        .lean();
+      if (existingClash) {
+        const e: any = new Error('Lesson time overlaps with an existing lesson');
+        e.code = '409_CONFLICT_OVERLAP';
+        e.meta = { clash: existingClash };
+        throw e;
+      }
+    }
+
+    // Step 3 — Intra-batch overlap detection (two incoming lessons overlapping each other)
+    if (parsed.length > 1) {
+      // Sort by start time
+      const sorted = parsed.slice().sort((a, b) => a.startAtUtc.getTime() - b.startAtUtc.getTime());
+      for (let i = 0; i < sorted.length - 1; i++) {
+        const a = sorted[i];
+        const b = sorted[i + 1];
+        if (a.endAtUtc.getTime() > b.startAtUtc.getTime()) {
+          const e: any = new Error('Incoming lessons overlap with each other');
+          e.code = '409_CONFLICT_OVERLAP';
+          e.meta = {
+            conflictBetween: [a.index, b.index],
+            a: { startAt: a.startAtUtc.toISOString(), endAt: a.endAtUtc.toISOString() },
+            b: { startAt: b.startAtUtc.toISOString(), endAt: b.endAtUtc.toISOString() }
+          };
+          throw e;
+        }
+      }
+    }
+
+    // Step 4 — Build docs array (now that all checks passed)
+    let nextOrder = await getNextOrderForCourse(courseId);
+    const docs: any[] = parsed.map(p => ({
+      courseId,
+      teacherId: p.teacherId,
+      title: p.original.title,
+      description: p.original.description?.trim() ?? undefined,
+      schedule: {
+        ...p.schedule, // keep date string, normalized time (HH:mm)
+        time: p.schedule.time
+      },
+      startAt: p.startAtUtc,
+      endAt: p.endAtUtc,
+      status: p.original.status || 'draft',
+      isTrialAvailable: !!p.original.isTrialAvailable,
+      trialCapacity: p.original.isTrialAvailable ? (p.original.trialCapacity ?? 1) : undefined,
+      order: typeof p.original.order === 'number' ? p.original.order : nextOrder++
+    }));
 
     if (process.env.NODE_ENV !== 'production') {
       // eslint-disable-next-line no-console
       console.debug(
         '[LessonService.bulkCreateForCourse] documents to insert (first 3):',
-        docs
-          .slice(0, 3)
-          .map(d => ({
-            startAt: d.startAt.toISOString(),
-            endAt: d.endAt.toISOString(),
-            schedule: d.schedule
-          }))
+        docs.slice(0, 3).map(d => ({
+          startAt: d.startAt.toISOString(),
+          endAt: d.endAt.toISOString(),
+          schedule: d.schedule
+        }))
       );
     }
 
@@ -709,25 +761,49 @@ export const LessonService = {
     const ops: any[] = [];
     const sessionsToUpdate: Array<{ lessonId: string; startAt: Date; endAt: Date }> = [];
 
+    // collect delete ops first
     for (const id of deletes || []) {
       if (!Types.ObjectId.isValid(id)) continue;
       ops.push({ deleteOne: { filter: { _id: new Types.ObjectId(id), courseId } } });
     }
 
+    // 1) Pre-parse all updates that contain schedule changes and compute canonical UTC intervals
+    const parsedUpdates: Array<{
+      lessonId: Types.ObjectId;
+      index: number;
+      original: any;
+      mergedSchedule?: { date: any; time: string; duration: number };
+      startAtUtc?: Date;
+      endAtUtc?: Date;
+      setFields?: Record<string, any>;
+    }> = [];
+
+    let updIndex = 0;
     for (const u of updates || []) {
-      if (!Types.ObjectId.isValid(u.lessonId)) continue;
+      if (!Types.ObjectId.isValid(u.lessonId)) {
+        updIndex++;
+        continue;
+      }
       const _id = new Types.ObjectId(u.lessonId);
 
-      const $set: Record<string, any> = {};
-      if (u.title !== undefined) $set.title = u.title;
-      if (u.description !== undefined) $set.description = u.description ?? '';
-      if (u.isTrialAvailable !== undefined) $set.isTrialAvailable = !!u.isTrialAvailable;
-      if (u.trialCapacity !== undefined) $set.trialCapacity = u.trialCapacity;
-      if (u.order !== undefined) $set.order = u.order;
-      if (u.vocabulary !== undefined) $set.vocabulary = u.vocabulary;
-      if (u.status !== undefined) $set.status = u.status;
+      const setFields: Record<string, any> = {};
+      if (u.title !== undefined) setFields.title = u.title;
+      if (u.description !== undefined) setFields.description = u.description ?? '';
+      if (u.isTrialAvailable !== undefined) setFields.isTrialAvailable = !!u.isTrialAvailable;
+      if (u.trialCapacity !== undefined) setFields.trialCapacity = u.trialCapacity;
+      if (u.order !== undefined) setFields.order = u.order;
+      if (u.vocabulary !== undefined) setFields.vocabulary = u.vocabulary;
+      if (u.status !== undefined) setFields.status = u.status;
+
+      const entry: any = {
+        lessonId: _id,
+        index: updIndex,
+        original: u,
+        setFields
+      };
 
       if (u.schedule) {
+        // fetch base to merge existing schedule values
         const base = await Lesson.findOne({ _id, courseId })
           .select({ schedule: 1, startAt: 1, endAt: 1 })
           .lean();
@@ -737,43 +813,119 @@ export const LessonService = {
           duration: u.schedule.duration ?? base?.schedule?.duration
         } as any;
 
+        // validate/normalize time if present
         if (merged.time) {
           const nt = normalizeToHHMM24(merged.time);
           if (!nt) {
             const e = new Error('Invalid schedule.time');
             (e as any).code = '422_VALIDATION';
-            (e as any).fields = [{ path: `updates.schedule.time`, message: 'Invalid time format' }];
+            (e as any).fields = [
+              { path: `updates.${updIndex}.schedule.time`, message: 'Invalid time format' }
+            ];
             throw e;
           }
           merged.time = nt;
         }
 
+        // compute start/end instants
         const { startAt, endAt } = await parseStartEnd(
           { date: merged.date, time: merged.time, duration: merged.duration },
           undefined,
           undefined,
           timeZone
         );
-        // Coerce to canonical UTC
         const startUtc = new Date(startAt.toISOString());
         const endUtc = new Date(endAt.toISOString());
 
-        await checkOverlap({
-          teacherId,
-          courseId,
-          startAt: startUtc,
-          endAt: endUtc,
-          exceptId: _id
-        });
-        $set.schedule = merged;
-        $set.startAt = startUtc;
-        $set.endAt = endUtc;
-
-        sessionsToUpdate.push({ lessonId: _id.toString(), startAt: startUtc, endAt: endUtc });
+        entry.mergedSchedule = merged;
+        entry.startAtUtc = startUtc;
+        entry.endAtUtc = endUtc;
+        entry.setFields = { ...setFields, schedule: merged, startAt: startUtc, endAt: endUtc };
       }
 
-      if (Object.keys($set).length) {
-        ops.push({ updateOne: { filter: { _id, courseId }, update: { $set } } });
+      parsedUpdates.push(entry);
+      updIndex++;
+    }
+
+    // 2) DB-level overlap detection:
+    // Build a single query that checks the incoming intervals against DB lessons, **excluding all lessons
+    // that are present in this same update payload** (they'll be moved by this request).
+    if (parsedUpdates.length > 0) {
+      // collect only updates that have start/end computed
+      const intervals = parsedUpdates
+        .filter(p => p.startAtUtc && p.endAtUtc)
+        .map(p => ({ start: p.startAtUtc!, end: p.endAtUtc!, id: p.lessonId }));
+
+      if (intervals.length > 0) {
+        // ids being updated - exclude them from DB clash check
+        const updatedIds = intervals.map(i => i.id);
+
+        // Build OR clauses comparing each incoming interval against any existing lesson (teacher-scope).
+        // Note: keep the scope to the teacher (we want to prevent teacher double-booking).
+        const orClauses = intervals.map(i => ({
+          startAt: { $lt: i.end },
+          endAt: { $gt: i.start }
+        }));
+
+        // Single DB query: teacher + active status + exclude updatedIds + any overlap
+        const existingClash = await Lesson.findOne({
+          teacherId,
+          status: { $ne: 'archived' },
+          _id: { $nin: updatedIds },
+          $or: orClauses
+        })
+          .select({ _id: 1, title: 1, startAt: 1, endAt: 1 })
+          .lean();
+
+        if (existingClash) {
+          const e: any = new Error('Lesson time overlaps with an existing lesson');
+          e.code = '409_CONFLICT_OVERLAP';
+          e.meta = { clash: existingClash };
+          throw e;
+        }
+      }
+    }
+
+    // 3) Intra-payload overlap detection among parsedUpdates (ignore items without schedule changes)
+    const toCheck = parsedUpdates
+      .filter(p => p.startAtUtc && p.endAtUtc)
+      .map(p => ({
+        id: p.lessonId.toString(),
+        start: p.startAtUtc!,
+        end: p.endAtUtc!,
+        idx: p.index
+      }));
+    if (toCheck.length > 1) {
+      toCheck.sort((a, b) => a.start.getTime() - b.start.getTime());
+      for (let i = 0; i < toCheck.length - 1; i++) {
+        const a = toCheck[i];
+        const b = toCheck[i + 1];
+        if (a.end.getTime() > b.start.getTime()) {
+          const e: any = new Error('Incoming updates overlap with each other');
+          e.code = '409_CONFLICT_OVERLAP';
+          e.meta = {
+            conflictBetween: [a.idx, b.idx],
+            a: { start: a.start.toISOString(), end: a.end.toISOString() },
+            b: { start: b.start.toISOString(), end: b.end.toISOString() }
+          };
+          throw e;
+        }
+      }
+    }
+
+    // 4) Build ops for updates (include schedule/startAt/endAt where present)
+    for (const p of parsedUpdates) {
+      if (Object.keys(p.setFields || {}).length) {
+        ops.push({
+          updateOne: { filter: { _id: p.lessonId, courseId }, update: { $set: p.setFields } }
+        });
+        if (p.startAtUtc && p.endAtUtc) {
+          sessionsToUpdate.push({
+            lessonId: p.lessonId.toString(),
+            startAt: p.startAtUtc,
+            endAt: p.endAtUtc
+          });
+        }
       }
     }
 
@@ -788,11 +940,10 @@ export const LessonService = {
 
     const refreshed = await Lesson.find({ courseId }).sort({ order: 1 }).lean();
 
-    const enrolledStudents = await BookingModel
-      .find({
-        course: courseId,
-        paymentStatus: 'PAID'
-      })
+    const enrolledStudents = await BookingModel.find({
+      course: courseId,
+      paymentStatus: 'PAID'
+    })
       .select('student')
       .lean();
 
@@ -1143,7 +1294,10 @@ export const LessonService = {
     ]);
 
     const ratingsMap = new Map(
-      ratings.map(r => [String(r._id), { averageRating: r.averageRating, totalRatings: r.totalRatings }])
+      ratings.map(r => [
+        String(r._id),
+        { averageRating: r.averageRating, totalRatings: r.totalRatings }
+      ])
     );
 
     const lessons: LessonItem[] = sessions.map((session: any) => {

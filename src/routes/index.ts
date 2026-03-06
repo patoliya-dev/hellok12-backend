@@ -34,6 +34,7 @@ router.use('/messages', messageRoutes);
 router.use('/feedbacks', feedbackRatingRoutes);
 router.use('/teachers/dashboard', dashboardRoutes);
 router.use('/students/dashboard', dashboardRoutes);
+router.use('/dashboard', dashboardRoutes);
 router.use('/earnings', earningsRoutes);
 router.use('/progress', progressRoutes);
 router.use('/school', manageTeachersStudentsRoutes);

@@ -6,15 +6,18 @@ import {
   getTrialBookings,
   getUpcomingSessions
 } from './dashboards.helper';
-import { SessionModel } from '../../models/sessions.model';
+import { SessionModel, SessionStatus } from '../../models/sessions.model';
 import { FeedbackRating } from '../../models/feedbackRatings.model';
 import bookingModel from '../../models/booking.model';
 import payoutModel from '../../models/payout.model';
+import { Course } from '../../models/course.model';
+import TransactionModel from '../../models/transaction.model';
+import { User } from '../../models/user.model';
 
 export const teacherDashboardService = {
   getDashboardStats: async (teacherId: string) => {
     const [upcomingSessions, trialBookings, averageRating, monthlyEarnings] = await Promise.all([
-      getUpcomingSessions(SessionModel, teacherId),
+      getUpcomingSessions(SessionModel, Course, teacherId),
       getTrialBookings(bookingModel, teacherId),
       getAverageRating(FeedbackRating, teacherId),
       getMonthlyEarnings(payoutModel, teacherId)
@@ -115,5 +118,152 @@ export const StudentDashboardService = {
     end.setHours(23, 59, 59, 999);
 
     return { start, end };
+  }
+};
+
+type Args = { schoolId: string; timeZone: string };
+
+type CurrencyAgg = {
+  currency: string;
+  amountCents: number;
+  netAmountCents: number;
+  count: number;
+};
+
+const toUpperCurrency = (v: any) =>
+  String(v || 'usd')
+    .trim()
+    .toUpperCase();
+const safeInt = (v: any) => (Number.isFinite(Number(v)) ? Math.trunc(Number(v)) : 0);
+
+function startEndOfWeekUTC(timeZone: string) {
+  const now = DateTime.now().setZone(timeZone);
+  return {
+    start: now.startOf('week').toUTC().toJSDate(),
+    end: now.endOf('week').toUTC().toJSDate()
+  };
+}
+
+function startEndOfMonthUTC(timeZone: string) {
+  const now = DateTime.now().setZone(timeZone);
+  return {
+    start: now.startOf('month').toUTC().toJSDate(),
+    end: now.endOf('month').toUTC().toJSDate()
+  };
+}
+
+export const SchoolDashboardService = {
+  async getSchoolMetrics({ schoolId, timeZone }: Args) {
+    const schoolObjId = new Types.ObjectId(schoolId);
+
+    const { start: weekStart, end: weekEnd } = startEndOfWeekUTC(timeZone);
+    const { start: monthStart, end: monthEnd } = startEndOfMonthUTC(timeZone);
+
+    /**
+     * IMPORTANT: ACTIVE COURSES ONLY
+     * - This becomes the single source of truth for courseIds used in other metrics.
+     */
+    const activeCoursesQuery = Course.find({
+      ownerId: schoolObjId,
+      ownerType: 'school',
+      status: 'active' // enforce active only
+    })
+      .select({ _id: 1 })
+      .lean();
+
+    const activeTeachersQuery = User.countDocuments({
+      role: 'teacher',
+      school: schoolObjId,
+      status: 'active',
+      isVerified: true
+    });
+
+    // Run independent queries concurrently
+    const [activeCourseDocs, activeTeachers] = await Promise.all([
+      activeCoursesQuery,
+      activeTeachersQuery
+    ]);
+
+    const courseIds = activeCourseDocs.map(c => c._id);
+    const safeCourseIds = courseIds.length ? courseIds : [new Types.ObjectId()];
+
+    const totalCourses = courseIds.length;
+
+    /**
+     * Scheduled lessons this week:
+     * - "scheduledLessonsThisWeek" should only consider sessions belonging to ACTIVE courses.
+     * - Keep the statuses you want to count.
+     */
+    const scheduledLessonsThisWeekQuery = SessionModel.countDocuments({
+      course: { $in: safeCourseIds },
+      start: { $gte: weekStart, $lte: weekEnd },
+      status: { $in: [SessionStatus.SCHEDULED, SessionStatus.IN_PROGRESS, SessionStatus.COMPLETED] }
+    });
+
+    /**
+     * Monthly revenue:
+     * - If your platform sets payee=school for school purchases, this is fine.
+     * - If you want revenue only from ACTIVE courses, you must store courseId in transaction.metadata
+     *   or keep a direct reference; otherwise you cannot reliably filter by course status here.
+     */
+    const revenueByCurrencyQuery: Promise<CurrencyAgg[]> = TransactionModel.aggregate([
+      {
+        $match: {
+          payee: schoolObjId,
+          status: 'SUCCEEDED',
+          createdAt: { $gte: monthStart, $lte: monthEnd }
+        }
+      },
+      {
+        $group: {
+          _id: { $toUpper: { $ifNull: ['$currency', 'usd'] } },
+          amountCents: { $sum: { $ifNull: ['$amount', 0] } },
+          netAmountCents: { $sum: { $ifNull: ['$netAmount', 0] } },
+          count: { $sum: 1 }
+        }
+      },
+      { $sort: { amountCents: -1 } },
+      {
+        $project: {
+          _id: 0,
+          currency: '$_id',
+          amountCents: 1,
+          netAmountCents: 1,
+          count: 1
+        }
+      }
+    ]);
+
+    const [scheduledLessonsThisWeek, revenueByCurrency] = await Promise.all([
+      scheduledLessonsThisWeekQuery,
+      revenueByCurrencyQuery
+    ]);
+
+    const primary = revenueByCurrency[0] || {
+      currency: 'USD',
+      amountCents: 0,
+      netAmountCents: 0,
+      count: 0
+    };
+
+    return {
+      activeTeachers,
+      totalCourses, // active courses only
+      scheduledLessonsThisWeek, // sessions from active courses only
+
+      monthlyRevenue: {
+        currency: toUpperCurrency(primary.currency),
+        amountCents: safeInt(primary.amountCents),
+        netAmountCents: safeInt(primary.netAmountCents),
+        transactionCount: safeInt(primary.count)
+      },
+
+      monthlyRevenueByCurrency: revenueByCurrency.map(r => ({
+        currency: toUpperCurrency(r.currency),
+        amountCents: safeInt(r.amountCents),
+        netAmountCents: safeInt(r.netAmountCents),
+        transactionCount: safeInt(r.count)
+      }))
+    };
   }
 };

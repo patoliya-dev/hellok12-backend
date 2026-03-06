@@ -1,57 +1,98 @@
 import { Types } from 'mongoose';
+import { Course } from '../../models/course.model';
+import { SessionStatus } from '../../models/sessions.model';
 
-export const getUpcomingSessions = async (
-  SessionModel: any,
-  teacherId: string
-): Promise<{
+type SessionModelType = {
+  countDocuments: (filter: any) => Promise<number>;
+};
+
+type CourseModelType = typeof Course;
+
+type UpcomingSessionsOut = {
   count: number;
   thisWeek: number;
   changeFromLastWeek: number;
-}> => {
+};
+
+function startOfWeekSunday(d: Date) {
+  const x = new Date(d);
+  x.setDate(x.getDate() - x.getDay());
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+export const getUpcomingSessions = async (
+  SessionModel: SessionModelType,
+  CourseModel: CourseModelType,
+  teacherId: string
+): Promise<UpcomingSessionsOut> => {
   const now = new Date();
 
-  // Get start of current week (Sunday)
-  const startOfWeek = new Date(now);
-  startOfWeek.setDate(now.getDate() - now.getDay());
-  startOfWeek.setHours(0, 0, 0, 0);
-
-  // Get end of current week (Saturday)
+  const startOfWeek = startOfWeekSunday(now);
   const endOfWeek = new Date(startOfWeek);
-  endOfWeek.setDate(startOfWeek.getDate() + 7);
+  endOfWeek.setDate(endOfWeek.getDate() + 7);
 
-  // Get start of last week
   const startOfLastWeek = new Date(startOfWeek);
-  startOfLastWeek.setDate(startOfWeek.getDate() - 7);
+  startOfLastWeek.setDate(startOfLastWeek.getDate() - 7);
+
+  const teacherObjId = new Types.ObjectId(teacherId);
+
+  /**
+   * IMPORTANT: ACTIVE COURSES ONLY
+   * We restrict sessions by session.course IN activeCourseIds.
+   *
+   * Choose the best “teacher course ownership rule” for your app:
+   * - If teacher owns their own courses: ownerType='teacher' & ownerId=teacherId
+   * - If teacher teaches school courses: teachers contains teacherId
+   *
+   * To support BOTH cases reliably, use $or.
+   */
+  const courseFilter = {
+    status: 'active',
+    teachers: teacherObjId
+  };
+
+  console.log('courseFilter', courseFilter);
+
+  const activeCourseDocs = await CourseModel.find(courseFilter).select({ _id: 1 }).lean();
+
+  console.log('activeCourseDocs', activeCourseDocs);
+
+  const activeCourseIds = activeCourseDocs.map(c => c._id);
+
+  // safe-empty to avoid $in: []
+  const safeCourseIds = activeCourseIds.length ? activeCourseIds : [new Types.ObjectId()];
+
+  const baseFilter = {
+    teacher: teacherObjId,
+    course: { $in: safeCourseIds },
+    status: SessionStatus.SCHEDULED // matches your previous ['SCHEDULED']
+  };
 
   const [totalUpcoming, thisWeek, lastWeek] = await Promise.all([
-    // Total upcoming sessions
+    // Total upcoming sessions (start >= now)
     SessionModel.countDocuments({
-      teacher: new Types.ObjectId(teacherId),
-      start: { $gte: now },
-      status: { $in: ['SCHEDULED'] }
+      ...baseFilter,
+      start: { $gte: now }
     }),
 
     // This week's sessions
     SessionModel.countDocuments({
-      teacher: new Types.ObjectId(teacherId),
-      start: { $gte: startOfWeek, $lt: endOfWeek },
-      status: { $in: ['SCHEDULED'] }
+      ...baseFilter,
+      start: { $gte: startOfWeek, $lt: endOfWeek }
     }),
 
-    // Last week's sessions (same time period)
+    // Last week's sessions (same weekday window)
     SessionModel.countDocuments({
-      teacher: new Types.ObjectId(teacherId),
-      start: { $gte: startOfLastWeek, $lt: startOfWeek },
-      status: { $in: ['SCHEDULED'] }
+      ...baseFilter,
+      start: { $gte: startOfLastWeek, $lt: startOfWeek }
     })
   ]);
-
-  const changeFromLastWeek = thisWeek - lastWeek;
 
   return {
     count: totalUpcoming,
     thisWeek,
-    changeFromLastWeek
+    changeFromLastWeek: thisWeek - lastWeek
   };
 };
 

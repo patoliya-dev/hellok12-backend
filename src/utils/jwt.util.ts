@@ -31,14 +31,6 @@ export const generateRefreshToken = (payload: JwtPayload, expiresIn?: string): s
   );
 };
 
-export const verifyToken = (token: string): JwtPayload => {
-  try {
-    return jwt.verify(token, config.jwtSecret as Secret) as JwtPayload;
-  } catch {
-    throw new Error('Invalid or expired token');
-  }
-};
-
 export const verifyRefreshToken = (token: string): JwtPayload => {
   try {
     return jwt.verify(token, config.jwtRefreshSecret as Secret) as JwtPayload;

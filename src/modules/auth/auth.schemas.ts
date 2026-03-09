@@ -251,19 +251,6 @@ export const resetPasswordSchema = z.object({
   })
 });
 
-// Email verification schemas
-export const resendVerificationSchema = z.object({
-  body: z.object({
-    email: emailSchema
-  })
-});
-
-export const verifyEmailSchema = z.object({
-  query: z.object({
-    token: z.string().min(1, 'Verification token is required')
-  })
-});
-
 // Change password schema (for authenticated users)
 export const changePasswordSchema = z.object({
   body: z.object({
@@ -292,13 +279,6 @@ export const updateProfileSchema = z.object({
     .strict()
 });
 
-// Refresh token schema
-export const refreshTokenSchema = z.object({
-  body: z.object({
-    refreshToken: z.string().min(1, 'Refresh token is required')
-  })
-});
-
 // Type exports for TypeScript
 export type RegistrationInput = z.infer<typeof registrationSchema>['body'];
 export type StudentRegistrationInput = z.infer<typeof studentRegistrationSchema>['body'];
@@ -312,49 +292,3 @@ export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>['body'];
 export type ChangePasswordInput = z.infer<typeof changePasswordSchema>['body'];
 export type UpdateProfileInput = z.infer<typeof updateProfileSchema>['body'];
 export type ChildInput = z.infer<typeof childSchema>;
-
-// Validation helper functions
-export const validateEmail = (email: string): boolean => {
-  try {
-    emailSchema.parse(email);
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-export const validatePassword = (password: string): boolean => {
-  try {
-    strongPasswordSchema.parse(password);
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-export const validatePhone = (phone: string): boolean => {
-  try {
-    phoneSchema.parse(phone);
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-// Schema selection helper for dynamic validation
-export const getRegistrationSchema = (role: string, userType?: string) => {
-  if (role === 'student/parent') {
-    return userType === 'parent' ? parentRegistrationSchema : studentRegistrationSchema;
-  }
-
-  switch (role) {
-    case 'teacher':
-      return teacherRegistrationSchema;
-    case 'school':
-      return schoolRegistrationSchema;
-    case 'student':
-      return studentRegistrationSchema;
-    default:
-      return registrationSchema;
-  }
-};

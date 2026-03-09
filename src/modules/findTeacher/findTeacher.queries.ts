@@ -767,7 +767,8 @@ export const teacherDetailsQuery = ({ teacherId, filter }: any) => {
             pipeline: [
               {
                 $match: {
-                  $expr: { $eq: ['$course', '$$courseId'] }
+                  $expr: { $eq: ['$course', '$$courseId'] },
+                  status: { $ne: 'CANCELLED' }
                 }
               },
               {

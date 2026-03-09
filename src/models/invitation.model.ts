@@ -17,7 +17,6 @@ export interface InvitationDoc extends Document {
   meta?: Record<string, any>;
   expiresAt: Date;
   acceptedAt?: Date;
-  rejectedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -51,8 +50,7 @@ const InvitationSchema = new Schema<InvitationDoc>(
 
     meta: { type: Schema.Types.Mixed, default: {} },
     expiresAt: { type: Date, required: true, index: true },
-    acceptedAt: { type: Date },
-    rejectedAt: { type: Date }
+    acceptedAt: { type: Date }
   },
   { timestamps: true }
 );

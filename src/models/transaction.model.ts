@@ -24,6 +24,8 @@ export interface ITransaction extends Document {
   title?: string; // e.g. "Course Purchase: Algebra 1"
   metadata?: any;
   downloadUrl?: string; // receipt or pdf url
+  // Canonical purchase-settlement timestamp used by earnings aggregations.
+  paidAt?: Date | null;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -56,6 +58,7 @@ const TransactionSchema = new Schema<ITransaction>({
   title: { type: String },
   metadata: { type: Object },
   downloadUrl: { type: String },
+  paidAt: { type: Date, default: null, index: true },
   createdAt: { type: Date, default: Date.now, index: true },
   updatedAt: { type: Date, default: Date.now }
 });
@@ -63,5 +66,8 @@ const TransactionSchema = new Schema<ITransaction>({
 TransactionSchema.index({ payee: 1, status: 1, createdAt: -1 });
 TransactionSchema.index({ booking: 1, status: 1 });
 TransactionSchema.index({ school: 1, status: 1, createdAt: -1 });
+// paidAt indexes keep earnings summary/graph queries fast when bucketing by settlement date.
+TransactionSchema.index({ payee: 1, payeeType: 1, status: 1, paidAt: -1 });
+TransactionSchema.index({ school: 1, status: 1, paidAt: -1 });
 
 export default mongoose.model<ITransaction>('Transaction', TransactionSchema);

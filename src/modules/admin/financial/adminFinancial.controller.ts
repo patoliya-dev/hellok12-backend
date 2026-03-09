@@ -22,6 +22,7 @@ function handle(res: Response, error: any) {
 }
 
 export const adminFinancialController = {
+  // Summary/trend validation stays strict because FE tabs are hard-coded.
   getSummary: async (req: Request, res: Response) => {
     try {
       const period = String(req.query.period || 'weekly');

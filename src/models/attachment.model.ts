@@ -10,7 +10,6 @@ const AttachmentSchema = new Schema(
     key: { type: String, required: true },
     url: { type: String, required: true },
     etag: { type: String, required: true },
-    checksum: { type: String, default: '' },
     storageType: { type: String, enum: ['S3'], default: 'S3' },
     isPublic: { type: Boolean, default: true },
     uploadedBy: { type: String, required: true },

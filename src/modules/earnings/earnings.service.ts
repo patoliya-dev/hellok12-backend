@@ -1,619 +1,581 @@
-import { Types } from 'mongoose';
 import { DateTime } from 'luxon';
-import payoutModel from '../../models/payout.model';
+import {
+  buildSummaryAmounts,
+  centsToAmount,
+  normalizeGrowthPercent,
+  percentageChange
+} from './earnings.calculations';
+import { EarningsActorRole, earningsRepositoryV2 } from './earnings.repository';
 
-interface IEarningsSummary {
-  thisWeek: {
-    amount: number;
-    percentageChange: number;
-    comparisonPeriod: string;
-  };
-  thisMonth: {
-    amount: number;
-    percentageChange: number;
-    comparisonPeriod: string;
-  };
-  thisYear: {
-    amount: number;
-    percentageChange: number;
-    comparisonPeriod: string;
-  };
-}
+type LegacyTrendPeriod = 'weekly' | 'monthly' | 'yearly';
+type EarningsRange = 'week' | 'month' | 'year';
 
-interface IEarningsSummary {
-  thisWeek: { amount: number; percentageChange: number; comparisonPeriod: string };
-  thisMonth: { amount: number; percentageChange: number; comparisonPeriod: string };
-  thisYear: { amount: number; percentageChange: number; comparisonPeriod: string };
-}
+type RangeWindow = {
+  currentStart: DateTime;
+  currentEnd: DateTime;
+  previousStart: DateTime;
+  previousEnd: DateTime;
+  comparisonPeriod: string;
+};
 
-// Shared receiver match for old + new payout structures
-function buildReceiverMatch(userId: string) {
-  const userObj = Types.ObjectId.isValid(userId) ? new Types.ObjectId(userId) : null;
-  const or: any[] = [
-    { 'metadata.raw.payoutReceiverId': userId }, // old
-    { 'metadata.schoolId': userId }, // new meta
-    { 'metadata.payoutReceiverId': userId } // optional future-proof
-  ];
-  if (userObj) or.unshift({ toUser: userObj }); // new canonical
-  return { $or: or };
-}
-
-// ISO week helper (matches MongoDB $isoWeek/$isoWeekYear)
-function getISOWeekParts(date: Date) {
-  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-  const dayNum = d.getUTCDay() || 7; // 1..7 (Mon..Sun)
-  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
-  const isoYear = d.getUTCFullYear();
-  const yearStart = new Date(Date.UTC(isoYear, 0, 1));
-  const weekNo = Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
-  return { isoWeek: weekNo, isoWeekYear: isoYear };
-}
-
-function toObjectId(id?: string) {
-  return id && Types.ObjectId.isValid(id) ? new Types.ObjectId(id) : null;
-}
+type Bucket = {
+  key: string;
+  label: string;
+  start: Date;
+  end: Date;
+};
 
 /**
- * Business decision:
- * - We compare "this period so far" vs "previous period for the same elapsed duration".
- *   This avoids inflated percentages early in a period.
- *
- * Example:
- * - If today is Wed, "this week" = Mon 00:00 → now
- * - "last week" = last Mon 00:00 → last Wed (same elapsed time)
+ * Legacy FE screens still use weekly/monthly/yearly.
+ * New endpoints use week/month/year.
+ * Keep both mappings so old clients do not break during rollout.
  */
-function getToDateRanges(timeZone = 'UTC') {
-  const nowLocal = DateTime.now().setZone(timeZone);
+const RANGE_TO_LEGACY: Record<EarningsRange, LegacyTrendPeriod> = {
+  week: 'weekly',
+  month: 'monthly',
+  year: 'yearly'
+};
 
-  // ---- Week (Monday start) ----
-  const weekStartLocal = nowLocal.startOf('day').minus({ days: (nowLocal.weekday + 6) % 7 }); // weekday: Mon=1..Sun=7
+const LEGACY_TO_RANGE: Record<LegacyTrendPeriod, EarningsRange> = {
+  weekly: 'week',
+  monthly: 'month',
+  yearly: 'year'
+};
 
-  const elapsedWeekMs = nowLocal.toMillis() - weekStartLocal.toMillis();
+// Accept both legacy and new range values from query params.
+const normalizeRange = (value?: string): EarningsRange => {
+  const v = String(value || '')
+    .trim()
+    .toLowerCase();
+  if (v === 'week' || v === 'weekly') return 'week';
+  if (v === 'year' || v === 'yearly') return 'year';
+  return 'month';
+};
 
-  const lastWeekStartLocal = weekStartLocal.minus({ weeks: 1 });
-  const lastWeekEndLocal = lastWeekStartLocal.plus({ milliseconds: elapsedWeekMs });
+const resolveRole = (role?: string): EarningsActorRole => {
+  return role === 'school' ? 'school' : 'teacher';
+};
 
-  // ---- Month ----
-  const monthStartLocal = nowLocal.startOf('month');
-  const elapsedMonthMs = nowLocal.toMillis() - monthStartLocal.toMillis();
+// Parse date input in user timezone, then normalize to UTC boundaries for DB filters.
+const parseDateAtBoundary = (value: unknown, boundary: 'start' | 'end', timeZone: string) => {
+  if (!value) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
 
-  const lastMonthStartLocal = monthStartLocal.minus({ months: 1 });
-  const lastMonthEndLocal = lastMonthStartLocal.plus({ milliseconds: elapsedMonthMs });
+  const parsed = DateTime.fromISO(raw, { zone: timeZone });
+  if (!parsed.isValid) return null;
 
-  // ---- Year ----
-  const yearStartLocal = nowLocal.startOf('year');
-  const elapsedYearMs = nowLocal.toMillis() - yearStartLocal.toMillis();
+  return boundary === 'start' ? parsed.startOf('day').toUTC() : parsed.endOf('day').toUTC();
+};
 
-  const lastYearStartLocal = yearStartLocal.minus({ years: 1 });
-  const lastYearEndLocal = lastYearStartLocal.plus({ milliseconds: elapsedYearMs });
+const startOfIsoWeek = (dt: DateTime) => dt.startOf('day').minus({ days: dt.weekday - 1 });
 
-  // Convert to UTC JS Dates for Mongo createdAt filtering (DB stored in UTC)
-  return {
-    now: nowLocal.toUTC().toJSDate(),
+/**
+ * Builds to-date windows used for current-vs-previous percentage comparisons.
+ * Important: previous period is clipped to the same elapsed duration so
+ * "month-to-date vs previous month-to-date" remains apples-to-apples.
+ */
+const getToDateWindow = (period: EarningsRange, nowLocal: DateTime): RangeWindow => {
+  if (period === 'week') {
+    const currentStart = startOfIsoWeek(nowLocal);
+    const currentEnd = nowLocal;
+    const elapsedMs = Math.max(0, currentEnd.toMillis() - currentStart.toMillis());
 
-    thisWeek: {
-      startDate: weekStartLocal.toUTC().toJSDate(),
-      endDate: nowLocal.toUTC().toJSDate()
-    },
-    lastWeek: {
-      startDate: lastWeekStartLocal.toUTC().toJSDate(),
-      endDate: lastWeekEndLocal.toUTC().toJSDate()
-    },
-
-    thisMonth: {
-      startDate: monthStartLocal.toUTC().toJSDate(),
-      endDate: nowLocal.toUTC().toJSDate()
-    },
-    lastMonth: {
-      startDate: lastMonthStartLocal.toUTC().toJSDate(),
-      endDate: lastMonthEndLocal.toUTC().toJSDate()
-    },
-
-    thisYear: {
-      startDate: yearStartLocal.toUTC().toJSDate(),
-      endDate: nowLocal.toUTC().toJSDate()
-    },
-    lastYear: {
-      startDate: lastYearStartLocal.toUTC().toJSDate(),
-      endDate: lastYearEndLocal.toUTC().toJSDate()
-    }
-  } as const;
-}
-
-function calculatePercentageChange(current: number, previous: number): number {
-  // If there was no previous earning, any positive current is effectively +100% from 0 baseline (UI convention).
-  if (!Number.isFinite(previous) || previous <= 0) return current > 0 ? 100 : 0;
-
-  const delta = ((current - previous) / previous) * 100;
-  // keep 1 decimal, avoid -0.0
-  const v = Number(delta.toFixed(1));
-  return Object.is(v, -0) ? 0 : v;
-}
-
-export const EarningsService = {
-  /**
-   * Robust receiver matching:
-   * - Newer payouts: `toUser: ObjectId`
-   * - Older/legacy: `metadata.raw.payoutReceiverId: string`
-   * - Some variants: `metadata.payoutReceiverId: string`
-   */
-  async calculateEarnings(
-    userId: string,
-    startDate: Date,
-    endDate: Date,
-    PayoutModel: any
-  ): Promise<number> {
-    const userObjId = toObjectId(userId);
-
-    const receiverOr: any[] = [];
-    if (userObjId) receiverOr.push({ toUser: userObjId });
-    // legacy/variants (string matches)
-    receiverOr.push({ 'metadata.raw.payoutReceiverId': String(userId) });
-    receiverOr.push({ 'metadata.payoutReceiverId': String(userId) });
-    receiverOr.push({ 'metadata.payoutReceiverId': userObjId }); // if stored as ObjectId in metadata
-
-    const result = await PayoutModel.aggregate([
-      {
-        $match: {
-          $or: receiverOr,
-          status: { $in: ['PAID', 'PROCESSING', 'PENDING'] },
-          createdAt: { $gte: startDate, $lte: endDate }
-        }
-      },
-      {
-        $group: {
-          _id: null,
-          // IMPORTANT:
-          // - If your payout docs store payee net in `netAmount` (cents), sum netAmount.
-          // - If you actually want gross, sum amount.
-          totalAmount: { $sum: { $ifNull: ['$netAmount', 0] } }
-        }
-      }
-    ]);
-
-    const cents = result?.[0]?.totalAmount ?? 0;
-    return Number((cents / 100).toFixed(2));
-  },
-
-  async getEarningsSummary(
-    userId: string,
-    PayoutModel: any,
-    timeZone = 'UTC'
-  ): Promise<IEarningsSummary> {
-    const ranges = getToDateRanges(timeZone);
-
-    const [
-      thisWeekEarnings,
-      lastWeekEarnings,
-      thisMonthEarnings,
-      lastMonthEarnings,
-      thisYearEarnings,
-      lastYearEarnings
-    ] = await Promise.all([
-      this.calculateEarnings(
-        userId,
-        ranges.thisWeek.startDate,
-        ranges.thisWeek.endDate,
-        PayoutModel
-      ),
-      this.calculateEarnings(
-        userId,
-        ranges.lastWeek.startDate,
-        ranges.lastWeek.endDate,
-        PayoutModel
-      ),
-
-      this.calculateEarnings(
-        userId,
-        ranges.thisMonth.startDate,
-        ranges.thisMonth.endDate,
-        PayoutModel
-      ),
-      this.calculateEarnings(
-        userId,
-        ranges.lastMonth.startDate,
-        ranges.lastMonth.endDate,
-        PayoutModel
-      ),
-
-      this.calculateEarnings(
-        userId,
-        ranges.thisYear.startDate,
-        ranges.thisYear.endDate,
-        PayoutModel
-      ),
-      this.calculateEarnings(
-        userId,
-        ranges.lastYear.startDate,
-        ranges.lastYear.endDate,
-        PayoutModel
-      )
-    ]);
+    const previousStart = currentStart.minus({ weeks: 1 });
+    const previousNaturalEnd = previousStart.plus({ days: 6 }).endOf('day');
+    const previousByElapsed = previousStart.plus({ milliseconds: elapsedMs });
+    const previousEnd =
+      previousByElapsed.toMillis() < previousNaturalEnd.toMillis()
+        ? previousByElapsed
+        : previousNaturalEnd;
 
     return {
-      thisWeek: {
-        amount: thisWeekEarnings,
-        percentageChange: calculatePercentageChange(thisWeekEarnings, lastWeekEarnings),
-        comparisonPeriod: 'vs previous week'
-      },
-      thisMonth: {
-        amount: thisMonthEarnings,
-        percentageChange: calculatePercentageChange(thisMonthEarnings, lastMonthEarnings),
-        comparisonPeriod: 'vs previous month'
-      },
-      thisYear: {
-        amount: thisYearEarnings,
-        percentageChange: calculatePercentageChange(thisYearEarnings, lastYearEarnings),
-        comparisonPeriod: 'vs previous year'
-      }
+      currentStart,
+      currentEnd,
+      previousStart,
+      previousEnd,
+      comparisonPeriod: 'vs previous week'
     };
-  },
+  }
 
-  // Get optimized earnings trend using aggregation Much faster than multiple queries
-  async getEarningsTrend(
-    userId: string,
-    period: 'weekly' | 'monthly' | 'yearly',
-    PayoutModel: any
-  ) {
-    const now = new Date();
-    const receiverMatch = buildReceiverMatch(userId);
+  if (period === 'year') {
+    const currentStart = nowLocal.startOf('year');
+    const currentEnd = nowLocal;
+    const elapsedMs = Math.max(0, currentEnd.toMillis() - currentStart.toMillis());
 
-    let groupBy: any;
-    let sortBy: any;
-    let dateRange: { start: Date; end: Date };
-    let labelFormat: (date: Date, index?: number) => string;
+    const previousStart = currentStart.minus({ years: 1 });
+    const previousNaturalEnd = previousStart.endOf('year');
+    const previousByElapsed = previousStart.plus({ milliseconds: elapsedMs });
+    const previousEnd =
+      previousByElapsed.toMillis() < previousNaturalEnd.toMillis()
+        ? previousByElapsed
+        : previousNaturalEnd;
 
-    if (period === 'weekly') {
-      // Last 12 weeks
-      const startDate = new Date(now);
-      startDate.setDate(now.getDate() - 11 * 7);
-      startDate.setHours(0, 0, 0, 0);
+    return {
+      currentStart,
+      currentEnd,
+      previousStart,
+      previousEnd,
+      comparisonPeriod: 'vs previous year'
+    };
+  }
 
-      dateRange = { start: startDate, end: now };
+  const currentStart = nowLocal.startOf('month');
+  const currentEnd = nowLocal;
+  const elapsedMs = Math.max(0, currentEnd.toMillis() - currentStart.toMillis());
 
-      // ISO week avoids JS getWeekNumber mismatch
-      groupBy = {
-        year: { $isoWeekYear: '$createdAt' },
-        week: { $isoWeek: '$createdAt' }
-      };
-      sortBy = { '_id.year': 1, '_id.week': 1 };
+  const previousStart = currentStart.minus({ months: 1 });
+  const previousNaturalEnd = previousStart.endOf('month');
+  const previousByElapsed = previousStart.plus({ milliseconds: elapsedMs });
+  const previousEnd =
+    previousByElapsed.toMillis() < previousNaturalEnd.toMillis()
+      ? previousByElapsed
+      : previousNaturalEnd;
 
-      labelFormat = (_date: Date, index: number = 0) => `Week ${index + 1}`;
-    } else if (period === 'monthly') {
-      const startDate = new Date(now.getFullYear(), 0, 1);
-      const endDate = new Date(now.getFullYear(), 11, 31, 23, 59, 59, 999);
+  return {
+    currentStart,
+    currentEnd,
+    previousStart,
+    previousEnd,
+    comparisonPeriod: 'vs previous month'
+  };
+};
 
-      dateRange = { start: startDate, end: endDate };
+const getDefaultGraphRange = (range: EarningsRange, nowLocal: DateTime) => {
+  if (range === 'week') {
+    const end = nowLocal.endOf('day');
+    const start = startOfIsoWeek(nowLocal).minus({ weeks: 11 }).startOf('day');
+    return { start, end };
+  }
 
-      groupBy = {
-        year: { $year: '$createdAt' },
-        month: { $month: '$createdAt' }
-      };
-      sortBy = { '_id.year': 1, '_id.month': 1 };
+  if (range === 'year') {
+    return {
+      start: nowLocal.startOf('year').minus({ years: 4 }),
+      end: nowLocal.endOf('day')
+    };
+  }
 
-      const monthNames = [
-        'Jan',
-        'Feb',
-        'Mar',
-        'Apr',
-        'May',
-        'Jun',
-        'Jul',
-        'Aug',
-        'Sep',
-        'Oct',
-        'Nov',
-        'Dec'
-      ];
-      labelFormat = (date: Date) => monthNames[date.getMonth()];
-    } else {
-      // yearly: last 5 years
-      const startDate = new Date(now.getFullYear() - 4, 0, 1);
-      dateRange = { start: startDate, end: now };
+  return {
+    start: nowLocal.startOf('year'),
+    end: nowLocal.endOf('year')
+  };
+};
 
-      groupBy = { year: { $year: '$createdAt' } };
-      sortBy = { '_id.year': 1 };
+const buildWeekBuckets = (startLocal: DateTime, endLocal: DateTime): Bucket[] => {
+  const buckets: Bucket[] = [];
+  let cursor = startOfIsoWeek(startLocal);
+  const hardEnd = endLocal.endOf('day');
+  let index = 1;
 
-      labelFormat = (date: Date) => String(date.getFullYear());
-    }
+  while (cursor.toMillis() <= hardEnd.toMillis()) {
+    const bucketEnd = cursor.plus({ days: 6 }).endOf('day');
+    buckets.push({
+      key: `${cursor.weekYear}-${cursor.weekNumber}`,
+      label: `Week ${index}`,
+      start: cursor.toUTC().toJSDate(),
+      end: bucketEnd.toUTC().toJSDate()
+    });
+    cursor = cursor.plus({ weeks: 1 });
+    index += 1;
+  }
 
-    const results = await PayoutModel.aggregate([
-      {
-        $match: {
-          ...receiverMatch,
-          status: { $in: ['PAID', 'PROCESSING', 'PENDING'] },
-          createdAt: { $gte: dateRange.start, $lte: dateRange.end }
-        }
-      },
-      {
-        $group: {
-          _id: groupBy,
-          totalAmount: { $sum: { $ifNull: ['$netAmount', 0] } },
-          count: { $sum: 1 }
-        }
-      },
-      { $sort: sortBy }
+  return buckets;
+};
+
+const buildMonthBuckets = (startLocal: DateTime, endLocal: DateTime): Bucket[] => {
+  const buckets: Bucket[] = [];
+  let cursor = startLocal.startOf('month');
+  const hardEnd = endLocal.endOf('month');
+  const spansMultiYear = cursor.year !== hardEnd.year;
+
+  while (cursor.toMillis() <= hardEnd.toMillis()) {
+    const monthEnd = cursor.endOf('month');
+    const shortMonth = cursor.toFormat('LLL');
+    buckets.push({
+      key: `${cursor.year}-${cursor.month}`,
+      label: spansMultiYear ? `${shortMonth} ${cursor.year}` : shortMonth,
+      start: cursor.toUTC().toJSDate(),
+      end: monthEnd.toUTC().toJSDate()
+    });
+    cursor = cursor.plus({ months: 1 }).startOf('month');
+  }
+
+  return buckets;
+};
+
+const buildYearBuckets = (startLocal: DateTime, endLocal: DateTime): Bucket[] => {
+  const buckets: Bucket[] = [];
+  let cursor = startLocal.startOf('year');
+  const hardEnd = endLocal.endOf('year');
+
+  while (cursor.toMillis() <= hardEnd.toMillis()) {
+    const yearEnd = cursor.endOf('year');
+    buckets.push({
+      key: String(cursor.year),
+      label: String(cursor.year),
+      start: cursor.toUTC().toJSDate(),
+      end: yearEnd.toUTC().toJSDate()
+    });
+    cursor = cursor.plus({ years: 1 }).startOf('year');
+  }
+
+  return buckets;
+};
+
+const buildBuckets = (range: EarningsRange, startLocal: DateTime, endLocal: DateTime) => {
+  if (range === 'week') return buildWeekBuckets(startLocal, endLocal);
+  if (range === 'year') return buildYearBuckets(startLocal, endLocal);
+  return buildMonthBuckets(startLocal, endLocal);
+};
+
+const toTransactionStatus = (value?: string) => {
+  const status = String(value || '')
+    .trim()
+    .toUpperCase();
+
+  if (status === 'SUCCEEDED') return 'PAID';
+  return status || 'PAID';
+};
+
+export const EarningsServiceV2 = {
+  /**
+   * Returns earnings summary cards and balance metrics.
+   * Earnings = PAID purchases only (from transactions); payouts are returned separately
+   * as cash-out metrics and must not reduce the earnings totals.
+   */
+  async getEarningsSummary(args: {
+    userId: string;
+    role?: string;
+    timeZone?: string;
+    range?: string;
+    from?: string;
+    to?: string;
+  }) {
+    const timeZone = args.timeZone || 'UTC';
+    const role = resolveRole(args.role);
+    const nowLocal = DateTime.now().setZone(timeZone);
+
+    const weekWindow = getToDateWindow('week', nowLocal);
+    const monthWindow = getToDateWindow('month', nowLocal);
+    const yearWindow = getToDateWindow('year', nowLocal);
+
+    const [weekCurrent, weekPrevious, monthCurrent, monthPrevious, yearCurrent, yearPrevious] =
+      await Promise.all([
+        earningsRepositoryV2.aggregateSalesTotals({
+          role,
+          userId: args.userId,
+          startDate: weekWindow.currentStart.toUTC().toJSDate(),
+          endDate: weekWindow.currentEnd.toUTC().toJSDate()
+        }),
+        earningsRepositoryV2.aggregateSalesTotals({
+          role,
+          userId: args.userId,
+          startDate: weekWindow.previousStart.toUTC().toJSDate(),
+          endDate: weekWindow.previousEnd.toUTC().toJSDate()
+        }),
+        earningsRepositoryV2.aggregateSalesTotals({
+          role,
+          userId: args.userId,
+          startDate: monthWindow.currentStart.toUTC().toJSDate(),
+          endDate: monthWindow.currentEnd.toUTC().toJSDate()
+        }),
+        earningsRepositoryV2.aggregateSalesTotals({
+          role,
+          userId: args.userId,
+          startDate: monthWindow.previousStart.toUTC().toJSDate(),
+          endDate: monthWindow.previousEnd.toUTC().toJSDate()
+        }),
+        earningsRepositoryV2.aggregateSalesTotals({
+          role,
+          userId: args.userId,
+          startDate: yearWindow.currentStart.toUTC().toJSDate(),
+          endDate: yearWindow.currentEnd.toUTC().toJSDate()
+        }),
+        earningsRepositoryV2.aggregateSalesTotals({
+          role,
+          userId: args.userId,
+          startDate: yearWindow.previousStart.toUTC().toJSDate(),
+          endDate: yearWindow.previousEnd.toUTC().toJSDate()
+        })
+      ]);
+
+    const selectedRange = normalizeRange(args.range);
+    const selectedDefaults = getToDateWindow(selectedRange, nowLocal);
+    const selectedFrom =
+      parseDateAtBoundary(args.from, 'start', timeZone) || selectedDefaults.currentStart.toUTC();
+    const selectedTo =
+      parseDateAtBoundary(args.to, 'end', timeZone) || selectedDefaults.currentEnd.toUTC();
+
+    // Keep earnings (sales) and payouts as separate aggregates.
+    const [selectedSales, selectedPaidOut, allTimeSales, allTimePaidOut] = await Promise.all([
+      earningsRepositoryV2.aggregateSalesTotals({
+        role,
+        userId: args.userId,
+        startDate: selectedFrom.toJSDate(),
+        endDate: selectedTo.toJSDate()
+      }),
+      earningsRepositoryV2.aggregatePaidOutTotals({
+        userId: args.userId,
+        startDate: selectedFrom.toJSDate(),
+        endDate: selectedTo.toJSDate()
+      }),
+      earningsRepositoryV2.aggregateSalesTotals({
+        role,
+        userId: args.userId,
+        startDate: new Date(0),
+        endDate: nowLocal.toUTC().toJSDate()
+      }),
+      earningsRepositoryV2.aggregatePaidOutTotals({
+        userId: args.userId
+      })
     ]);
 
-    return this.formatTrendData(results, period, now, labelFormat);
-  },
-
-  // keep your existing formatter but fix weekly matcher to ISO week
-  formatTrendData(
-    results: any[],
-    period: 'weekly' | 'monthly' | 'yearly',
-    now: Date,
-    labelFormat: (date: Date, index?: number) => string
-  ) {
-    const dataPoints: Array<{ label: string; amount: number }> = [];
-
-    if (period === 'weekly') {
-      for (let i = 0; i < 12; i++) {
-        const weekDate = new Date(now);
-        weekDate.setDate(now.getDate() - (11 - i) * 7);
-
-        // compute ISO week+year in JS to match Mongo isoWeek
-        const { isoWeek, isoWeekYear } = getISOWeekParts(weekDate);
-
-        const matchingData = results.find(
-          r => r._id.week === isoWeek && r._id.year === isoWeekYear
-        );
-
-        dataPoints.push({
-          label: labelFormat(weekDate, i),
-          amount: matchingData ? matchingData.totalAmount / 100 : 0
-        });
-      }
-    } else if (period === 'monthly') {
-      // Generate all 12 months for current year
-      for (let month = 0; month < 12; month++) {
-        const monthDate = new Date(now.getFullYear(), month, 1);
-
-        const matchingData = results.find(
-          r => r._id.year === now.getFullYear() && r._id.month === month + 1
-        );
-
-        dataPoints.push({
-          label: labelFormat(monthDate),
-          amount: matchingData ? matchingData.totalAmount / 100 : 0
-        });
-      }
-    } else {
-      // Generate 5 years
-      for (let i = 4; i >= 0; i--) {
-        const yearDate = new Date(now.getFullYear() - i, 0, 1);
-
-        const matchingData = results.find(r => r._id.year === yearDate.getFullYear());
-
-        dataPoints.push({
-          label: labelFormat(yearDate),
-          amount: matchingData ? matchingData.totalAmount / 100 : 0
-        });
-      }
-    }
-
-    return dataPoints;
-  },
-
-  async transformPayoutData(payouts: any[]) {
-    return payouts.map(payout => {
-      const transaction = payout.transaction;
-      const booking = transaction?.booking;
-      const course = booking?.course;
-
-      let lessonService = 'Unknown Service';
-      let lessonType: string | undefined;
-
-      if (course) {
-        lessonService = course.title || 'Untitled Course';
-        lessonType = course.lessonType;
-      }
-
-      return {
-        _id: payout._id.toString(),
-        date: payout.createdAt,
-        lessonService,
-        amount: payout.amount / 100, // Convert cents to dollars
-        currency: payout.currency.toUpperCase(),
-        status: payout.status,
-        lessonType
-      };
-    });
-  },
-
-  async listPayouts(query: any) {
-    const {
-      toUser,
-      lessonType,
-      status,
-      minAmount,
-      maxAmount,
-      startDate,
-      endDate,
-      page = 1,
-      limit = 10,
-      sortBy = 'createdAt',
-      sortOrder = 'desc'
-    } = query;
-
-    const toUserObj = toObjectId(toUser);
-    if (!toUserObj) {
-      return {
-        data: [],
-        pagination: { total: 0, page, limit, totalPages: 0 }
-      };
-    }
-
-    // Amount ranges (cents)
-    const ranges: Record<string, { min: number; max: number }> = {
-      '0-50': { min: 0, max: 5000 },
-      '50-100': { min: 5000, max: 10000 },
-      '100-200': { min: 10000, max: 20000 },
-      '200+': { min: 20000, max: Number.MAX_SAFE_INTEGER }
-    };
-
-    const match: any = {
-      $or: [
-        { toUser: toUserObj }, // ✅ new payouts
-        { 'metadata.raw.payoutReceiverId': toUser }, // ✅ old payouts (string)
-        { 'metadata.schoolId': toUser } // ✅ new school payouts store schoolId as string
-      ]
-    };
-
-    // Payment status filter
-    if (status) match.status = status;
-
-    if (minAmount || maxAmount) {
-      if (minAmount === '200' && !maxAmount) {
-        match.amount = { $gte: ranges['200+'].min };
-      } else {
-        const r = ranges[`${minAmount}-${maxAmount}`];
-        if (r) match.amount = { $gte: r.min, $lte: r.max };
-      }
-    }
-
-    if (startDate || endDate) {
-      match.createdAt = {};
-      if (startDate) match.createdAt.$gte = new Date(startDate);
-      if (endDate) match.createdAt.$lte = new Date(endDate);
-    }
-
-    const sortStage: any = { [sortBy]: sortOrder === 'asc' ? 1 : -1, _id: 1 };
-    const skip = (page - 1) * limit;
-
-    // ---- Pipeline ----
-    const pipeline: any[] = [
-      { $match: match },
-
-      // join transaction -> booking -> course
-      {
-        $lookup: {
-          from: 'transactions',
-          localField: 'transaction',
-          foreignField: '_id',
-          as: 'tx'
-        }
-      },
-      { $unwind: { path: '$tx', preserveNullAndEmptyArrays: true } },
-
-      {
-        $lookup: {
-          from: 'bookings',
-          localField: 'tx.booking',
-          foreignField: '_id',
-          as: 'booking'
-        }
-      },
-      { $unwind: { path: '$booking', preserveNullAndEmptyArrays: true } },
-
-      {
-        $lookup: {
-          from: 'courses',
-          localField: 'booking.course',
-          foreignField: '_id',
-          as: 'course'
-        }
-      },
-      { $unwind: { path: '$course', preserveNullAndEmptyArrays: true } }
-    ];
-
-    // Apply lessonType filter BEFORE pagination (fixes totals + pages)
-    if (lessonType) {
-      pipeline.push({ $match: { 'course.lessonType': lessonType } });
-    }
-
-    // total count (after all filters)
-    const countPipeline = [...pipeline, { $count: 'total' }];
-
-    // data query (sort + paginate + shape)
-    pipeline.push(
-      { $sort: sortStage },
-      { $skip: skip },
-      { $limit: limit },
-      {
-        $project: {
-          _id: 1,
-          createdAt: 1,
-          status: 1,
-          currency: 1,
-          amount: 1,
-          toType: 1,
-          toUser: 1,
-          lessonService: { $ifNull: ['$course.title', 'Untitled Course'] },
-          lessonType: '$course.lessonType'
-        }
-      }
+    const selectedAmounts = buildSummaryAmounts(
+      selectedSales,
+      selectedPaidOut,
+      allTimeSales.netCents,
+      allTimePaidOut
     );
 
-    const [rows, count] = await Promise.all([
-      payoutModel.aggregate(pipeline),
-      payoutModel.aggregate(countPipeline)
-    ]);
+    const weekCurrentAmount = centsToAmount(weekCurrent.netCents);
+    const weekPreviousAmount = centsToAmount(weekPrevious.netCents);
+    const monthCurrentAmount = centsToAmount(monthCurrent.netCents);
+    const monthPreviousAmount = centsToAmount(monthPrevious.netCents);
+    const yearCurrentAmount = centsToAmount(yearCurrent.netCents);
+    const yearPreviousAmount = centsToAmount(yearPrevious.netCents);
 
-    const total = count?.[0]?.total || 0;
+    return {
+      range: selectedRange,
+      from: selectedFrom.toJSDate(),
+      to: selectedTo.toJSDate(),
+      grossSales: selectedAmounts.grossSales,
+      platformFees: selectedAmounts.platformFees,
+      netEarnings: selectedAmounts.netEarnings,
+      paidOut: selectedAmounts.paidOut,
+      availableBalance: selectedAmounts.availableBalance,
+      pending: selectedAmounts.pending,
 
-    const data = rows.map((p: any) => ({
-      _id: String(p._id),
-      date: p.createdAt,
-      lessonService: p.lessonService,
-      amount: (p.amount || 0) / 100,
-      currency: String(p.currency || '').toUpperCase(),
-      status: p.status,
-      lessonType: p.lessonType
+      // Backward-compatible cards used by existing app screens.
+      thisWeek: {
+        amount: weekCurrentAmount,
+        percentageChange: normalizeGrowthPercent(
+          percentageChange(weekCurrentAmount, weekPreviousAmount)
+        ),
+        comparisonPeriod: weekWindow.comparisonPeriod
+      },
+      thisMonth: {
+        amount: monthCurrentAmount,
+        percentageChange: normalizeGrowthPercent(
+          percentageChange(monthCurrentAmount, monthPreviousAmount)
+        ),
+        comparisonPeriod: monthWindow.comparisonPeriod
+      },
+      thisYear: {
+        amount: yearCurrentAmount,
+        percentageChange: normalizeGrowthPercent(
+          percentageChange(yearCurrentAmount, yearPreviousAmount)
+        ),
+        comparisonPeriod: yearWindow.comparisonPeriod
+      }
+    };
+  },
+
+  async getEarningsGraph(args: {
+    userId: string;
+    role?: string;
+    range?: string;
+    period?: string;
+    from?: string;
+    to?: string;
+    timeZone?: string;
+  }) {
+    const timeZone = args.timeZone || 'UTC';
+    const role = resolveRole(args.role);
+    const legacyPeriod = String(args.period || '')
+      .trim()
+      .toLowerCase() as LegacyTrendPeriod;
+    const selectedRange = normalizeRange(args.range || LEGACY_TO_RANGE[legacyPeriod] || 'month');
+    const nowLocal = DateTime.now().setZone(timeZone);
+
+    const defaults = getDefaultGraphRange(selectedRange, nowLocal);
+    const from = parseDateAtBoundary(args.from, 'start', timeZone) || defaults.start.toUTC();
+    const to = parseDateAtBoundary(args.to, 'end', timeZone) || defaults.end.toUTC();
+
+    const startLocal = from.setZone(timeZone);
+    const endLocal = to.setZone(timeZone);
+    const buckets = buildBuckets(selectedRange, startLocal, endLocal);
+
+    // Graph is based on purchase settlement time buckets (never payout events).
+    const rows = await earningsRepositoryV2.aggregateSalesByRangeBucket({
+      role,
+      userId: args.userId,
+      bucket: selectedRange,
+      startDate: buckets[0]?.start || from.toJSDate(),
+      endDate: buckets[buckets.length - 1]?.end || to.toJSDate()
+    });
+
+    const totalsByKey = new Map<
+      string,
+      { grossCents: number; platformFeeCents: number; netCents: number }
+    >();
+
+    rows.forEach((row: any) => {
+      if (selectedRange === 'week') {
+        totalsByKey.set(`${row?._id?.y}-${row?._id?.w}`, {
+          grossCents: Number(row?.grossCents || 0),
+          platformFeeCents: Number(row?.platformFeeCents || 0),
+          netCents: Number(row?.netCents || 0)
+        });
+        return;
+      }
+
+      if (selectedRange === 'month') {
+        totalsByKey.set(`${row?._id?.y}-${row?._id?.m}`, {
+          grossCents: Number(row?.grossCents || 0),
+          platformFeeCents: Number(row?.platformFeeCents || 0),
+          netCents: Number(row?.netCents || 0)
+        });
+        return;
+      }
+
+      totalsByKey.set(String(row?._id?.y), {
+        grossCents: Number(row?.grossCents || 0),
+        platformFeeCents: Number(row?.platformFeeCents || 0),
+        netCents: Number(row?.netCents || 0)
+      });
+    });
+
+    const graphBuckets = buckets.map(bucket => {
+      const totals = totalsByKey.get(bucket.key) || {
+        grossCents: 0,
+        platformFeeCents: 0,
+        netCents: 0
+      };
+
+      return {
+        label: bucket.label,
+        start: bucket.start,
+        end: bucket.end,
+        grossSales: centsToAmount(totals.grossCents),
+        platformFees: centsToAmount(totals.platformFeeCents),
+        netEarnings: centsToAmount(totals.netCents)
+      };
+    });
+
+    return {
+      range: selectedRange,
+      period: RANGE_TO_LEGACY[selectedRange],
+      from: from.toJSDate(),
+      to: to.toJSDate(),
+      buckets: graphBuckets,
+      // Backward-compatible shape used by current teacher/school graphs.
+      dataPoints: graphBuckets.map(item => ({
+        label: item.label,
+        amount: item.netEarnings
+      }))
+    };
+  },
+
+  /**
+   * Returns sales entry rows for earnings table filters.
+   * Amounts are normalized to net purchase earnings in USD for UI display.
+   */
+  async listEarnings(args: {
+    userId: string;
+    role?: string;
+    lessonType?: string;
+    status?: string;
+    minAmount?: string | number;
+    maxAmount?: string | number;
+    startDate?: string;
+    endDate?: string;
+    page?: number;
+    limit?: number;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+    timeZone?: string;
+  }) {
+    const timeZone = args.timeZone || 'UTC';
+    const role = resolveRole(args.role);
+    const page = Math.max(1, Number(args.page || 1));
+    const limit = Math.min(100, Math.max(1, Number(args.limit || 10)));
+    const startDate = parseDateAtBoundary(args.startDate, 'start', timeZone)?.toJSDate();
+    const endDate = parseDateAtBoundary(args.endDate, 'end', timeZone)?.toJSDate();
+    const minAmount =
+      args.minAmount !== undefined && args.minAmount !== null ? Number(args.minAmount) : undefined;
+    const maxAmount =
+      args.maxAmount !== undefined && args.maxAmount !== null ? Number(args.maxAmount) : undefined;
+
+    const result = await earningsRepositoryV2.listSalesEntries({
+      role,
+      userId: args.userId,
+      lessonType: args.lessonType,
+      status: args.status,
+      minAmount: Number.isFinite(minAmount as number) ? (minAmount as number) : undefined,
+      maxAmount: Number.isFinite(maxAmount as number) ? (maxAmount as number) : undefined,
+      startDate,
+      endDate,
+      page,
+      limit,
+      sortBy: args.sortBy || 'date',
+      sortOrder: args.sortOrder || 'desc'
+    });
+
+    const data = result.rows.map((row: any) => ({
+      _id: String(row._id),
+      date: row.date,
+      lessonService: row.lessonService,
+      amount: Number(row.amount || 0),
+      currency: 'USD',
+      status: toTransactionStatus(row.status),
+      lessonType: row.lessonType
     }));
 
     return {
       data,
-      pagination: {
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit)
-      }
+      pagination: result.pagination
     };
   },
 
-  async getTotalPayoutsAfterCommission(userId: string, filters?: any) {
-    const { startDate, endDate } = filters;
+  async getTotalPayoutsAfterCommission(args: {
+    userId: string;
+    startDate?: string;
+    endDate?: string;
+    page?: number;
+    limit?: number;
+    timeZone?: string;
+  }) {
+    const timeZone = args.timeZone || 'UTC';
+    const startDate = parseDateAtBoundary(args.startDate, 'start', timeZone)?.toJSDate();
+    const endDate = parseDateAtBoundary(args.endDate, 'end', timeZone)?.toJSDate();
+    const page = Math.max(1, Number(args.page || 1));
+    const limit = Math.min(100, Math.max(1, Number(args.limit || 10)));
 
-    const query: any = {
-      'metadata.raw.payoutReceiverId': userId,
-      status: 'PAID'
-    };
+    const result = await earningsRepositoryV2.listPaidOutPayouts({
+      userId: args.userId,
+      startDate,
+      endDate,
+      page,
+      limit
+    });
 
-    if (startDate || endDate) {
-      query.createdAt = {};
-      if (startDate) query.createdAt.$gte = startDate;
-      if (endDate) query.createdAt.$lte = endDate;
-    }
-
-    const total = await payoutModel.countDocuments(query);
-
-    const payouts = await payoutModel
-      .find(query)
-      .populate({
-        path: 'transaction',
-        select: 'downloadUrl reference'
-      })
-      .populate({
-        path: 'invoice',
-        select: 'invoiceNumber'
-      })
-      .sort({ createdAt: -1 })
-      .lean();
-
-    const formattedPayouts: any = payouts.map((payout: any) => ({
-      _id: payout._id.toString(),
-      invoiceNumber: payout.transaction.reference,
-      date: payout.createdAt,
-      amount: payout.netAmount,
-      status: payout.status,
-      downloadUrl: payout.transaction?.downloadUrl || `/api/payouts/${payout._id}/download`
+    const payouts = result.rows.map((payout: any) => ({
+      _id: String(payout._id),
+      invoiceNumber:
+        payout?.transaction?.reference ||
+        payout?.paymentRef ||
+        `PAYOUT-${String(payout._id).slice(-6).toUpperCase()}`,
+      date: payout?.paidAt || payout?.createdAt,
+      // Keep cents for backward compatibility; frontend converts /100 today.
+      amount: Number(payout?.netAmount || payout?.amount || 0),
+      status: String(payout?.status || ''),
+      downloadUrl: payout?.transaction?.downloadUrl || null
     }));
 
     return {
-      payouts: formattedPayouts,
-      total
+      payouts,
+      total: result.pagination.total,
+      pagination: result.pagination
     };
   }
 };

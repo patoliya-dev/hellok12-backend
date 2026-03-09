@@ -19,6 +19,7 @@ import manageTeachersStudentsRoutes from '../modules/school/manageTeachersStuden
 import invitationRoutes from '../modules/invitations/invitation.routes';
 import notificationRoutes from '../modules/notifications/notification.routes';
 import sessionRoutes from '../modules/sessions/sessions.routes';
+import payoutAccountRoutes from '../modules/payoutAccounts/payoutAccount.routes';
 
 const router = Router();
 
@@ -45,5 +46,6 @@ router.use('/school', manageTeachersStudentsRoutes);
 router.use('/invitations', invitationRoutes);
 router.use('/notifications', notificationRoutes);
 router.use('/sessions', sessionRoutes);
+router.use('/payout-account', payoutAccountRoutes);
 
 export default router;

@@ -1143,7 +1143,7 @@ export const LessonService = {
       })
       .populate({
         path: 'course',
-        select: 'title _id mode description lessonType introImageRef',
+        select: 'title _id mode description lessonType address introImageRef',
         populate: { path: 'introImageRef', select: 'url' }
       })
       .select('joinUrl status start end lesson course')
@@ -1151,6 +1151,35 @@ export const LessonService = {
       .skip(skip)
       .limit(opts.limit)
       .lean();
+
+    // Booking address resolution for in-person 1-on-1 courses.
+    const oneOnOneInPersonCourseIds = Array.from(
+      new Set(
+        sessions
+          .filter((s: any) => s?.course?.mode === 'in-person' && s?.course?.lessonType === '1-on-1')
+          .map((s: any) => String(s.course?._id))
+          .filter(Boolean)
+      )
+    );
+
+    const bookingAddressByCourseId = new Map<string, any>();
+    if (oneOnOneInPersonCourseIds.length > 0) {
+      const bookings = await BookingModel.find({
+        student: studentObjId,
+        course: { $in: oneOnOneInPersonCourseIds.map(id => new Types.ObjectId(id)) },
+        paymentStatus: { $in: ['PAID', 'NOT_REQUIRED'] }
+      })
+        .select('course address updatedAt createdAt')
+        .sort({ updatedAt: -1, createdAt: -1 })
+        .lean();
+
+      for (const b of bookings) {
+        const cId = String(b.course);
+        if (!bookingAddressByCourseId.has(cId) && b.address) {
+          bookingAddressByCourseId.set(cId, b.address);
+        }
+      }
+    }
 
     // Teacher ratings (avoid bad $in if empty)
     const teacherIds = sessions
@@ -1185,9 +1214,23 @@ export const LessonService = {
       const tId = s.lesson?.teacherId?._id ? String(s.lesson.teacherId._id) : null;
       const rating = tId ? ratingsMap.get(tId) : null;
 
+      const lessonType = s?.course?.lessonType || '1-on-1';
+      const courseMode = s?.course?.mode || 'online';
+      let address: any = null;
+
+      if (courseMode === 'in-person') {
+        if (lessonType === 'group') {
+          address = s?.course?.address || null;
+        } else {
+          address =
+            bookingAddressByCourseId.get(String(s?.course?._id)) || s?.course?.address || null;
+        }
+      }
+
       if (tId && rating) {
         return {
           ...s,
+          address,
           lesson: {
             ...s.lesson,
             teacherId: { ...s.lesson.teacherId, rating }
@@ -1198,13 +1241,14 @@ export const LessonService = {
       if (tId) {
         return {
           ...s,
+          address,
           lesson: {
             ...s.lesson,
             teacherId: { ...s.lesson.teacherId, rating: { averageRating: 0, totalRatings: 0 } }
           }
         };
       }
-      return s;
+      return { ...s, address };
     });
   },
 

@@ -393,12 +393,20 @@ function pdfStrokeRect(x: number, y: number, w: number, h: number) {
 
 export const adminFinancialService = {
   // ---------------- SUMMARY CARDS ----------------
+  /**
+   * Admin financial summary cards.
+   * Definitions:
+   * - totalEarnings: purchase gross from successful transactions.
+   * - commissionEarnings: platform fee from successful transactions.
+   * - totalPayouts: completed payout cash-out totals.
+   * These metrics intentionally stay separate to avoid mixing revenue with cash-out.
+   */
   getSummary: async ({ period }: { period: SummaryPeriod }) => {
     const windows = getSummaryWindows(period);
 
     const [thisRevenue, lastRevenue, thisCommission, lastCommission, thisPayout, lastPayout] =
       await Promise.all([
-        // total earnings: transactions amount (cents)
+        // total earnings: successful purchase transaction amount (cents)
         TransactionModel.aggregate([
           {
             $match: {
@@ -418,7 +426,7 @@ export const adminFinancialService = {
           { $group: { _id: null, total: { $sum: { $ifNull: ['$amount', 0] } } } }
         ]),
 
-        // commission: sum platformFee (cents)
+        // commission: successful transaction platform fee (cents)
         TransactionModel.aggregate([
           {
             $match: {
@@ -438,7 +446,7 @@ export const adminFinancialService = {
           { $group: { _id: null, total: { $sum: { $ifNull: ['$platformFee', 0] } } } }
         ]),
 
-        // payouts: sum netAmount (cents)
+        // payouts: completed cash-out amount (cents)
         PayoutModel.aggregate([
           {
             $match: {
@@ -488,10 +496,16 @@ export const adminFinancialService = {
   },
 
   // ---------------- TREND (chart) ----------------
+  /**
+   * Returns time-series chart rows for payout/revenue/commission tabs.
+   * Bucket source is chosen by tab:
+   * - payout -> payout events
+   * - revenue/commission -> transaction events
+   */
   getTrend: async ({ tab, period }: { tab: TrendTab; period: TrendPeriod }) => {
     const bucket = buildTrendBuckets(period);
 
-    // choose source + amount field in cents
+    // Choose source + amount field in cents.
     const isPayout = tab === 'payout';
     const isCommission = tab === 'commission';
 
@@ -520,6 +534,7 @@ export const adminFinancialService = {
       sort = { '_id.y': 1 };
     }
 
+    // Aggregate into period buckets in Mongo for scalability with large datasets.
     const rows = await Model.aggregate([
       { $match: match },
       { $group: { _id: groupId, total: { $sum: { $ifNull: [sumField, 0] } } } },
@@ -538,7 +553,7 @@ export const adminFinancialService = {
       amountByBucket.set(String(r?._id?.y), Number(r?.total || 0));
     });
 
-    // format to chart points matching FE (label + amount in USD)
+    // Format to chart points matching FE contracts (label + amount in USD).
     const dataPoints: Array<{ label: string; amount: number }> = [];
 
     if (period === 'weekly') {
@@ -609,8 +624,8 @@ export const adminFinancialService = {
     const order = normalizeSortOrder(sortOrder);
     const sortStage = getPayoutSortStage(sortBy, order);
 
-    // Join: payouts -> toUser -> schoolProfile (optional) + transaction reference
-    // Search should match teacher/school name OR schoolProfile.schoolName
+    // Join: payouts -> user + school profile + transaction for display/search columns.
+    // Search intentionally matches both person and institution names.
     const term = String(search || '').trim();
     const rx = term ? new RegExp(escapeRegex(term), 'i') : null;
 
@@ -764,6 +779,7 @@ export const adminFinancialService = {
     }
 
     // Prefer rows backed by transactions that already have a downloadable receipt/invoice URL.
+    // This keeps "Download" action reliable in top visible rows.
     pipeline.push(
       {
         $addFields: {

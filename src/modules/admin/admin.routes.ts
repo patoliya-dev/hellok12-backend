@@ -3,6 +3,8 @@ import { authenticate, authorize } from '../../middlewares/auth';
 import { USER_ROLES } from '../../utils/constants';
 import { adminController } from './admin.controller';
 import adminFinancialRoutes from './financial/adminFinancial.routes';
+import adminPayoutRoutes from './payouts/payout.routes';
+import payoutAccountAdminRoutes from './payoutAccounts/payoutAccountAdmin.routes';
 
 const router = Router();
 
@@ -22,5 +24,7 @@ router.get('/schools', adminController.getSchools);
 router.get('/schools/:schoolId/details', adminController.getSchoolDetails);
 
 router.use('/financial', adminFinancialRoutes);
+router.use('/', adminPayoutRoutes);
+router.use('/', payoutAccountAdminRoutes);
 
 export default router;

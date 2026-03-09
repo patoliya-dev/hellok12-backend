@@ -4,6 +4,25 @@ import Logger from '../../utils/winstonLogger.utils';
 import { getTeacherFilters } from './findTeacher.helper';
 
 export const FindTeacherController = {
+  async listSchools(req: Request, res: Response, next: NextFunction) {
+    try {
+      const schools = await FindTeacherService.listSchools();
+
+      return res.status(200).json({
+        message: 'Schools fetched successfully',
+        success: true,
+        data: schools
+      });
+    } catch (error: any) {
+      Logger.error('Error fetching schools:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to fetch schools',
+        error: error.message
+      });
+    }
+  },
+
   async findTeachers(req: Request, res: Response, next: NextFunction) {
     try {
       const { filters, pagination } = getTeacherFilters(req.query);

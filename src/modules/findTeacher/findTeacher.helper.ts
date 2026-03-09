@@ -1,4 +1,6 @@
 export const getTeacherFilters = (query: any) => {
+  const isTrialAvailable = parseBooleanQuery(query?.isTrialAvailable);
+
   const filters = {
     school: query?.school && query.school,
     languages: query?.languages && query.languages,
@@ -10,7 +12,7 @@ export const getTeacherFilters = (query: any) => {
     name: query?.name && query.name,
     mode: query?.mode && JSON.parse(query.mode as string),
     lessonType: query?.lessonType && JSON.parse(query.lessonType as string),
-    isTrialAvailable: query?.isTrialAvailable && (query.isTrialAvailable as string) === 'true'
+    isTrialAvailable
   };
   const pagination = {
     offset: parseInt(query.offset as string),
@@ -19,6 +21,16 @@ export const getTeacherFilters = (query: any) => {
 
   return { filters, pagination };
 };
+
+function parseBooleanQuery(value: unknown): boolean | undefined {
+  if (typeof value === 'boolean') return value;
+  if (typeof value !== 'string') return undefined;
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'true') return true;
+  if (normalized === 'false') return false;
+  return undefined;
+}
 
 /**
  * Parse availability filter from query string

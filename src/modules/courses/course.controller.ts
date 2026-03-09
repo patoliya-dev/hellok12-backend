@@ -6,6 +6,8 @@ import { USER_ROLES } from '../../utils/constants';
 import { ValidatedRequest } from '../../middlewares/validation';
 import { normalizeTimezone } from '../lessons/lesson.util';
 import { AuthenticatedRequest } from '../../middlewares/auth';
+import { notificationService } from '../notifications/notification.service';
+import { buildCourseDiff } from '../notifications/notificationDiff.util';
 
 export const createCourse = async (req: ValidatedRequest, res: Response) => {
   const parsed = courseCreateSchema.safeParse(req.body);
@@ -46,10 +48,25 @@ export const updateCourse = async (req: Request, res: Response) => {
     const rawTz = req.userTimezone || 'UTC';
     const timezone = normalizeTimezone(rawTz);
 
+    const beforeCourse = await CourseService.getById(req.params.id);
     const updated = await CourseService.update(req.params.id, parsed.data, owner, timezone);
 
     if (!updated) {
       return res.status(404).json(createErrorResponse('Course not found', 'Not found', 404));
+    }
+
+    try {
+      const diff = buildCourseDiff(beforeCourse, updated, timezone);
+      await notificationService.notifyCourseUpdated({
+        actorUserId: req.user?.id,
+        actorRole: req.user?.role,
+        courseId: String((updated as any)._id || req.params.id),
+        title: String((updated as any).title || ''),
+        diff,
+        changedAt: new Date().toISOString()
+      });
+    } catch {
+      // intentionally non-blocking
     }
 
     return res.status(200).json(createSuccessResponse(updated, 'Course updated successfully', 200));

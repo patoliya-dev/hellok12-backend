@@ -17,6 +17,7 @@ import earningsRoutes from '../modules/earnings/earnings.routes';
 import progressRoutes from '../modules/progress/progress.routes';
 import manageTeachersStudentsRoutes from '../modules/school/manageTeachersStudents.routes';
 import invitationRoutes from '../modules/invitations/invitation.routes';
+import notificationRoutes from '../modules/notifications/notification.routes';
 
 const router = Router();
 
@@ -41,5 +42,6 @@ router.use('/earnings', earningsRoutes);
 router.use('/progress', progressRoutes);
 router.use('/school', manageTeachersStudentsRoutes);
 router.use('/invitations', invitationRoutes);
+router.use('/notifications', notificationRoutes);
 
 export default router;

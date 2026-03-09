@@ -27,6 +27,11 @@ export const teachersStudentsInvitationController = {
       const limit = String(req.query.limit || '200');
       const search = String(req.query.search || '').trim();
       const status = String(req.query.status || '').trim();
+      const includeReminderMeta =
+        String(req.query.includeReminderMeta || '').trim() === '1' ||
+        String(req.query.includeReminderMeta || '')
+          .trim()
+          .toLowerCase() === 'true';
 
       let schoolId: string | undefined;
 
@@ -49,7 +54,8 @@ export const teachersStudentsInvitationController = {
         page,
         limit,
         search,
-        status
+        status,
+        includeReminderMeta
       });
 
       return res.status(200).json(createSuccessResponse(data, 'Fetched'));
@@ -161,6 +167,30 @@ export const teachersStudentsInvitationController = {
       const { action } = req.body; // APPROVE | REJECT
       const out = await SchoolService.approveRejectTeacher(schoolId, teacherId, action);
       return res.status(200).json(createSuccessResponse(out, 'Teacher status updated'));
+    } catch (e: any) {
+      return handle(res, e);
+    }
+  },
+
+  sendTeacherNotification: async (req: Request, res: Response) => {
+    try {
+      const senderUser = req.user as any;
+      const teacherId = req.params.teacherId;
+      const body = (req as any).validatedBody || req.body;
+
+      const role = String(senderUser?.role || '').toLowerCase();
+      const schoolId = role === USER_ROLES.SUPER_ADMIN ? body.schoolId : senderUser?.id;
+
+      const out = await SchoolService.sendTeacherNotification({
+        senderUser,
+        schoolId,
+        teacherId,
+        message: body.message,
+        title: body.title,
+        context: body.context || 'PROFILE_COMPLETION'
+      });
+
+      return res.status(200).json(createSuccessResponse(out, 'Notification sent'));
     } catch (e: any) {
       return handle(res, e);
     }

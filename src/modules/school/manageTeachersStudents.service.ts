@@ -8,6 +8,9 @@ import { Lesson } from '../../models/lesson.model';
 import { Invitation } from '../../models/invitation.model';
 import { normalizeEmail, generateRawToken, hashToken } from '../invitations/invitation.util';
 import { TeacherProfileDoc } from '../../models/teacherProfile.model';
+import Logger from '../../utils/winstonLogger.utils';
+import { notificationService } from '../notifications/notification.service';
+import { Notification } from '../../models/notification.model';
 
 type RecipientRole = 'teacher' | 'student' | 'parent' | 'school';
 
@@ -40,6 +43,7 @@ type GetTeachersArgs = {
   limit?: string;
   search?: string;
   status?: string;
+  includeReminderMeta?: boolean;
 };
 
 function parseAgeRange(ageRange: string): { min?: number; max?: number } {
@@ -87,13 +91,26 @@ type ListInvitationsArgs = {
   teacherType?: string; // "school" | "independent" (super_admin only)
 };
 
+type SendTeacherNotificationArgs = {
+  senderUser: {
+    id: string;
+    role: string;
+  };
+  schoolId?: string;
+  teacherId: string;
+  message: string;
+  title?: string;
+  context?: string;
+};
+
 export const SchoolService = {
   getSchoolTeachers: async ({
     requesterRole,
     schoolId,
     teacherType,
     search = '',
-    status = ''
+    status = '',
+    includeReminderMeta = false
   }: GetTeachersArgs) => {
     const q: any = { role: 'teacher' };
     // requesterRole: "school" | "super_admin"
@@ -163,8 +180,40 @@ export const SchoolService = {
       studentsAgg.map((s: any) => [String(s._id), s.totalStudents])
     );
 
+    let reminderMetaMap = new Map<string, { at?: Date; by?: any }>();
+    if (includeReminderMeta && teachers.length > 0) {
+      const teacherObjectIds = teachers.map(t => t._id);
+      const reminderMatch: any = {
+        type: 'SCHOOL_CUSTOM_MESSAGE',
+        recipientUserId: { $in: teacherObjectIds },
+        'metadata.context': 'PROFILE_COMPLETION'
+      };
+      if (schoolId && Types.ObjectId.isValid(schoolId)) {
+        reminderMatch['metadata.schoolId'] = String(schoolId);
+      }
+
+      const reminders = await Notification.aggregate([
+        { $match: reminderMatch },
+        { $sort: { createdAt: -1 } },
+        {
+          $group: {
+            _id: '$recipientUserId',
+            lastProfileReminderAt: { $first: '$createdAt' },
+            lastProfileReminderBy: { $first: '$metadata.sentBy' }
+          }
+        }
+      ]);
+      reminderMetaMap = new Map(
+        reminders.map((r: any) => [
+          String(r._id),
+          { at: r.lastProfileReminderAt, by: r.lastProfileReminderBy }
+        ])
+      );
+    }
+
     const mappedTeachers = teachers.map(t => {
       const tid = String(t._id);
+      const reminderMeta = reminderMetaMap.get(tid);
 
       return {
         _id: t._id,
@@ -184,6 +233,10 @@ export const SchoolService = {
           totalLessons: lessonsMap.get(tid) ?? 0,
           totalStudents: studentsMap.get(tid) ?? 0,
           rating: (t.teacherProfile as any)?.averageRating ?? '—'
+        },
+        reminderMeta: {
+          lastProfileReminderAt: reminderMeta?.at || null,
+          lastProfileReminderBy: reminderMeta?.by || null
         }
       };
     });
@@ -353,6 +406,38 @@ export const SchoolService = {
       );
     }
 
+    try {
+      await notificationService.create({
+        recipientUserId: inviterId,
+        type: 'INVITATION_CREATED',
+        title: 'Invitation sent',
+        message: 'Invitation sent to ' + recipientEmail + ' as ' + role + '.',
+        metadata: {
+          invitationId: String(invitation._id),
+          recipientEmail,
+          recipientRole: role,
+          deepLink:
+            inviterRoleNorm === 'super_admin' ? '/admin/notifications' : '/school/notifications'
+        }
+      });
+
+      if (existingUser?._id) {
+        await notificationService.create({
+          recipientUserId: String(existingUser._id),
+          type: 'INVITATION_CREATED',
+          title: 'You received an invitation',
+          message: inviterDisplayName + ' invited you to join HelloK12 as ' + role + '.',
+          metadata: {
+            invitationId: String(invitation._id),
+            recipientRole: role,
+            deepLink: '/accept-invitation'
+          }
+        });
+      }
+    } catch (notificationError) {
+      Logger.error('Failed to create invitation notifications', notificationError);
+    }
+
     return {
       invitationId: String(invitation._id),
       expiresAt
@@ -466,6 +551,28 @@ export const SchoolService = {
     inv.status = 'cancelled';
     await inv.save();
 
+    try {
+      const invitedUser = await User.findOne({ email: inv.recipientEmail })
+        .select('_id role')
+        .lean();
+      if (invitedUser?._id) {
+        const role = String(invitedUser.role);
+        await notificationService.create({
+          recipientUserId: String(invitedUser._id),
+          type: 'INVITATION_REJECTED',
+          title: 'Invitation cancelled',
+          message: 'An invitation sent to you has been cancelled.',
+          metadata: {
+            invitationId: String(inv._id),
+            deepLink:
+              role === 'super_admin' ? '/admin/notifications' : '/' + role + '/notifications'
+          }
+        });
+      }
+    } catch (notificationError) {
+      Logger.error('Failed to create invitation cancellation notification', notificationError);
+    }
+
     return { success: true, data: { cancelled: true } };
   },
 
@@ -491,6 +598,22 @@ export const SchoolService = {
       teacher.approvedAt = new Date();
       teacher.status = 'active';
       await teacher.save();
+
+      try {
+        await notificationService.createManyForUsers([String(teacher._id), schoolId], {
+          type: 'ADMIN_ACTION',
+          title: 'Teacher approved',
+          message: 'Teacher approval has been completed successfully.',
+          metadata: {
+            teacherId: String(teacher._id),
+            schoolId,
+            deepLink: '/school/notifications'
+          }
+        });
+      } catch (notificationError) {
+        Logger.error('Failed to notify teacher approval', notificationError);
+      }
+
       return { success: true, data: { approved: true } };
     }
 
@@ -499,7 +622,60 @@ export const SchoolService = {
     teacher.profile = { ...(teacher.profile || {}) };
     teacher.status = 'inactive';
     await teacher.save();
+
+    try {
+      await notificationService.createManyForUsers([String(teacher._id), schoolId], {
+        type: 'TEACHER_REMOVED',
+        title: 'Teacher removed from school',
+        message: 'Teacher-school association was removed.',
+        metadata: {
+          teacherId: String(teacher._id),
+          schoolId,
+          deepLink: '/school/notifications'
+        }
+      });
+    } catch (notificationError) {
+      Logger.error('Failed to notify teacher rejection/removal', notificationError);
+    }
+
     return { success: true, data: { rejected: true } };
+  },
+
+  sendTeacherNotification: async ({
+    senderUser,
+    schoolId,
+    teacherId,
+    message,
+    title,
+    context
+  }: SendTeacherNotificationArgs) => {
+    if (!Types.ObjectId.isValid(teacherId))
+      throw Object.assign(new Error('Invalid teacher id'), { statusCode: 400 });
+
+    const senderRole = normalize(senderUser?.role);
+    if (senderRole !== 'school' && senderRole !== 'super_admin') {
+      throw Object.assign(new Error('Forbidden'), { statusCode: 403 });
+    }
+
+    if (senderRole === 'school' && String(senderUser?.id) !== String(schoolId || senderUser?.id)) {
+      throw Object.assign(new Error('School can only send notifications for itself'), {
+        statusCode: 403
+      });
+    }
+
+    await notificationService.sendSchoolCustomMessage({
+      senderUser: {
+        id: senderUser.id,
+        role: senderUser.role as any
+      },
+      schoolId: schoolId || undefined,
+      teacherId,
+      title,
+      message,
+      context: context || 'PROFILE_COMPLETION'
+    });
+
+    return { sent: true };
   },
 
   getStudents: async ({

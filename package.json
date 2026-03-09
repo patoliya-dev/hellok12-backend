@@ -17,7 +17,8 @@
     "build-run": "tsc && npm start",
     "format:check": "prettier --check .",
     "format:fix": "prettier --write . --ignore-path .prettierignore",
-    "bootstrap:superadmin": "node dist/scripts/bootstrapSuperAdmin.js"
+    "bootstrap:superadmin": "node dist/scripts/bootstrapSuperAdmin.js",
+    "seed:notifications": "node dist/scripts/seedNotifications.js"
   },
   "lint-staged": {
     "*.{ts,js}": [

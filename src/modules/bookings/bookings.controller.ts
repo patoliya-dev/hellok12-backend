@@ -7,6 +7,8 @@ import { SessionModel } from '../../models/sessions.model';
 import { createErrorResponse, createSuccessResponse } from '../../utils/apiResponse';
 import { COURSE_MODE, LESSON_TYPES } from '../../utils/constants';
 import { canPurchaseCourseRun } from './entitlement.util';
+import { notificationService } from '../notifications/notification.service';
+import Logger from '../../utils/winstonLogger.utils';
 
 type AddressPayload = {
   line1?: string;
@@ -465,6 +467,26 @@ export async function createBooking(req: Request, res: Response) {
           message: 'Trial booking created but failed to attach session',
           error: trialSyncErr?.message || 'Failed to sync trial booking session'
         });
+      }
+    }
+
+    // Trial booking confirmation should notify instantly (paid confirmations are emitted from Stripe webhooks).
+    if (isTrial) {
+      try {
+        await notificationService.create({
+          recipientUserId: String(studentObjectId),
+          type: 'BOOKING_CONFIRMED',
+          title: 'Trial booking confirmed',
+          message: 'Your trial lesson booking is confirmed.',
+          metadata: {
+            bookingId: String((booking as any)._id),
+            courseId: String(courseObjectId),
+            lessonId: booking?.lesson ? String(booking.lesson) : null,
+            deepLink: '/student/notifications'
+          }
+        });
+      } catch (notificationError) {
+        Logger.error('Failed to create trial booking notification', notificationError);
       }
     }
 

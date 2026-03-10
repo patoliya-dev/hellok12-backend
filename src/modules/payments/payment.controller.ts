@@ -214,7 +214,16 @@ export async function listTransactions(req: Request, res: Response, next: NextFu
     const page = parseInt((req.query.page as string) || '1', 10);
     const skip = (page - 1) * limit;
 
-    const baseFilter: any = { $or: [{ payer: userId }, { payee: userId }] };
+    // Historical writes can store payer/payee as either ObjectId or plain string.
+    // Use $toString matching so both representations are returned reliably.
+    const baseFilter: any = {
+      $or: [
+        { payer: userId },
+        { payee: userId },
+        { $expr: { $eq: [{ $toString: '$payer' }, userId] } },
+        { $expr: { $eq: [{ $toString: '$payee' }, userId] } }
+      ]
+    };
     if (status && status !== 'ALL') {
       const statusMap: any = { Completed: 'SUCCEEDED', CompletedUpper: 'SUCCEEDED' };
       baseFilter.status = statusMap[status] || status;
@@ -287,9 +296,14 @@ export async function listInvoices(req: Request, res: Response, next: NextFuncti
     const page = parseInt((req.query.page as string) || '1', 10);
     const skip = (page - 1) * limit;
 
+    // Historical rows may store `user` as string or ObjectId.
+    const invoiceOwnerFilter: any = {
+      $or: [{ user: userId }, { $expr: { $eq: [{ $toString: '$user' }, userId] } }]
+    };
+
     const [items, total] = await Promise.all([
-      InvoiceModel.find({ user: userId }).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
-      InvoiceModel.countDocuments({ user: userId })
+      InvoiceModel.find(invoiceOwnerFilter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+      InvoiceModel.countDocuments(invoiceOwnerFilter)
     ]);
 
     const data = items.map(inv => ({
@@ -333,18 +347,79 @@ export async function downloadInvoice(req: Request, res: Response, next: NextFun
     const userId = (req as any).user?.id;
     const invoiceId = req.params.id;
     if (!userId) return res.status(401).send({ success: false, message: 'Unauthorized' });
-    const invoice = await InvoiceModel.findOne({ _id: invoiceId, user: userId }).lean();
+    const invoice = await InvoiceModel.findById(invoiceId).lean();
     if (!invoice) return res.status(404).json({ success: false, message: 'Invoice not found' });
-    if (invoice.pdfUrl) return res.json({ success: true, url: invoice.pdfUrl });
+
+    // Legacy rows may have user stored inconsistently; authorize by invoice.user when present.
+    if (invoice.user && String(invoice.user) !== userId) {
+      return res.status(403).json({ success: false, message: 'Forbidden' });
+    }
+
+    const localUrl = invoice.pdfUrl || invoice.hostedInvoiceUrl;
+    if (localUrl) return res.json({ success: true, url: localUrl });
+
     if (invoice.stripeInvoiceId) {
       const stripeInvoice = await stripeService.getInvoice(invoice.stripeInvoiceId);
-      const pdfUrl =
-        (stripeInvoice as any)?.invoice_pdf || (stripeInvoice as any)?.hosted_invoice_url || null;
-      if (pdfUrl) {
-        await InvoiceModel.findByIdAndUpdate(invoice._id, { pdfUrl, updatedAt: new Date() });
-        return res.json({ success: true, url: pdfUrl });
+      const stripePdfUrl = (stripeInvoice as any)?.invoice_pdf || null;
+      const stripeHostedUrl = (stripeInvoice as any)?.hosted_invoice_url || null;
+      const stripeUrl = stripePdfUrl || stripeHostedUrl;
+      if (stripeUrl) {
+        await InvoiceModel.findByIdAndUpdate(invoice._id, {
+          ...(stripePdfUrl ? { pdfUrl: stripePdfUrl } : {}),
+          ...(stripeHostedUrl ? { hostedInvoiceUrl: stripeHostedUrl } : {}),
+          updatedAt: new Date()
+        });
+        return res.json({ success: true, url: stripeUrl });
       }
     }
+
+    // Fallback: return transaction receipt/download URL when invoice-specific URLs are not present.
+    let tx: any = null;
+    const txFromMetadata = (invoice as any)?.metadata?.transaction;
+    const piFromMetadata = (invoice as any)?.metadata?.paymentIntent;
+    const piFromRawMetadata = (invoice as any)?.metadata?.raw?.paymentIntent;
+    const bookingFromRawMetadata = (invoice as any)?.metadata?.raw?.bookingId;
+
+    const ownerMatch: any = {
+      $or: [
+        { payer: userId },
+        { payee: userId },
+        { $expr: { $eq: [{ $toString: '$payer' }, userId] } },
+        { $expr: { $eq: [{ $toString: '$payee' }, userId] } }
+      ]
+    };
+
+    if (txFromMetadata) {
+      tx = await TransactionModel.findOne({ _id: txFromMetadata, ...ownerMatch }).lean();
+    }
+    if (!tx && invoice.stripeInvoiceId) {
+      tx = await TransactionModel.findOne({
+        stripeInvoiceId: invoice.stripeInvoiceId,
+        ...ownerMatch
+      }).lean();
+    }
+    if (!tx && piFromMetadata) {
+      tx = await TransactionModel.findOne({
+        stripePaymentIntentId: piFromMetadata,
+        ...ownerMatch
+      }).lean();
+    }
+    if (!tx && piFromRawMetadata) {
+      tx = await TransactionModel.findOne({
+        stripePaymentIntentId: piFromRawMetadata,
+        ...ownerMatch
+      }).lean();
+    }
+    if (!tx && bookingFromRawMetadata) {
+      tx = await TransactionModel.findOne({
+        booking: bookingFromRawMetadata,
+        ...ownerMatch
+      }).lean();
+    }
+    if (tx?.downloadUrl) {
+      return res.json({ success: true, url: tx.downloadUrl });
+    }
+
     return res.status(404).json({ success: false, message: 'No PDF available for this invoice' });
   } catch (err) {
     next(err);
